@@ -23,13 +23,13 @@ Interactive question tools for [Pi](https://github.com/badlogic/pi-mono) that le
 ### From Git
 
 ```bash
-pi install git:https://github.com/sentabi1/pi-ask-user-question
+pi install git:https://github.com/the-sleeping-teemo/pi-ask-user-question
 ```
 
 ### From a local checkout
 
 ```bash
-git clone https://github.com/sentabi1/pi-ask-user-question.git
+git clone https://github.com/the-sleeping-teemo/pi-ask-user-question.git
 cd pi-ask-user-question
 npm install
 pi install .

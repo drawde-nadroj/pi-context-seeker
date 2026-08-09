@@ -7,9 +7,9 @@ It adds two tools: `ask_user_question` for one free-form or choice question, and
 Install from Git:
 
 ```bash
-pi install git:https://github.com/sentabi1/pi-ask-user-question
+pi install git:https://github.com/the-sleeping-teemo/pi-ask-user-question
 ```
 
-Repository: https://github.com/sentabi1/pi-ask-user-question
+Repository: https://github.com/the-sleeping-teemo/pi-ask-user-question
 
 I would especially value feedback on terminal compatibility, keyboard flow, structured tool results, and cases where the agent chooses the wrong question mode. Issues and contributions are welcome—including help making an accurate short demo.

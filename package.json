@@ -3,14 +3,14 @@
   "version": "0.1.0",
   "description": "Interactive single and batch question tools for Pi",
   "license": "MIT",
-  "author": "Jordan (sentabi1)",
+  "author": "Jordan (the-sleeping-teemo)",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sentabi1/pi-ask-user-question.git"
+    "url": "git+https://github.com/the-sleeping-teemo/pi-ask-user-question.git"
   },
-  "homepage": "https://github.com/sentabi1/pi-ask-user-question#readme",
+  "homepage": "https://github.com/the-sleeping-teemo/pi-ask-user-question#readme",
   "bugs": {
-    "url": "https://github.com/sentabi1/pi-ask-user-question/issues"
+    "url": "https://github.com/the-sleeping-teemo/pi-ask-user-question/issues"
   },
   "keywords": [
     "pi-package"
