@@ -1,0 +1,48 @@
+{
+  "name": "pi-ask-user-question",
+  "version": "0.1.0",
+  "description": "Interactive single and batch question tools for Pi",
+  "license": "MIT",
+  "author": "Jordan (sentabi1)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sentabi1/pi-ask-user-question.git"
+  },
+  "homepage": "https://github.com/sentabi1/pi-ask-user-question#readme",
+  "bugs": {
+    "url": "https://github.com/sentabi1/pi-ask-user-question/issues"
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "type": "module",
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE",
+    "CONTRIBUTING.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/ask-user-question.ts"
+    ]
+  },
+  "scripts": {
+    "test": "tsx test/ask-user-question.test.ts && tsx test/final-review-regressions.test.ts",
+    "typecheck": "tsc --noEmit",
+    "pack:check": "npm pack --dry-run"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "latest",
+    "@earendil-works/pi-tui": "latest",
+    "@types/node": "latest",
+    "tsx": "latest",
+    "typebox": "latest",
+    "typescript": "latest"
+  }
+}
