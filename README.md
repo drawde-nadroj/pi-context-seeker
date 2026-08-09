@@ -1,6 +1,8 @@
 # pi-context-seeker
 
-Adaptive questions for building shared context in [Pi](https://github.com/earendil-works/pi)—giving you precise control over what an agent learns, making efficient use of its context window, and reducing tokens wasted on guesses and rework.
+Explain what you know so you can find what lies between the seams.
+
+Adaptive questions for building shared context with the [Pi Coding Agent](https://github.com/earendil-works/pi)—giving you precise control over what an agent learns, making efficient use of its context window, and reducing tokens wasted on guesses and rework.
 
 ## Highlights
 
