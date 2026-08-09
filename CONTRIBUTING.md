@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve `pi-ask-user-question`.
+Thanks for helping improve `pi-context-seeker`.
 
 1. Open an issue for substantial behavior or interface changes so the approach can be discussed first.
 2. Fork the repository and create a focused branch.

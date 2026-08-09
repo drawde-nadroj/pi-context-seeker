@@ -50,6 +50,7 @@ export interface BatchQuestionResultDetails {
 	answers: TabAnswer[];
 	unansweredQuestions?: QuestionDef[];
 	unansweredNotes?: Array<{ questionIndex: number; note: string }>;
+	skippedQuestionIndexes?: number[];
 	clarification?: string;
 	activeQuestionIndex?: number;
 	activeDraft?: TabAnswer;
@@ -262,17 +263,26 @@ export function batchUnavailableResult(questions: QuestionDef[]) {
 }
 
 export function buildBatchResult(questions: QuestionDef[], answers: TabAnswer[]) {
-	const lines = [`User answered all ${questions.length} questions.`];
+	const isAnswered = (entry: TabAnswer | undefined) => {
+		if (typeof entry?.answer === "string") return entry.answer.trim().length > 0;
+		return entry?.answer !== null && entry?.answer !== undefined && (!Array.isArray(entry.answer) || entry.answer.length > 0);
+	};
+	const skippedQuestionIndexes = questions
+		.map((_question, index) => index)
+		.filter((index) => !isAnswered(answers.find((answer) => answer.questionIndex === index)));
+	const answeredCount = questions.length - skippedQuestionIndexes.length;
+	const lines = skippedQuestionIndexes.length > 0
+		? [`User submitted ${answeredCount} ${answeredCount === 1 ? "answer" : "answers"} and skipped ${skippedQuestionIndexes.length} ${skippedQuestionIndexes.length === 1 ? "question" : "questions"}.`]
+		: [`User answered all ${questions.length} questions.`];
+
 	questions.forEach((question, questionIndex) => {
 		const tabAnswer = answers.find((answer) => answer.questionIndex === questionIndex);
-		let answerText = "(no answer)";
-		if (typeof tabAnswer?.answer === "string") {
-			answerText = tabAnswer.answer.trim() || "(empty response)";
-		} else if (Array.isArray(tabAnswer?.answer)) {
-			answerText = tabAnswer.answer.length > 0
-				? tabAnswer.answer.map(formatAnswerForModel).join(", ")
-				: "(none selected)";
-		} else if (tabAnswer?.answer) {
+		let answerText = "(skipped by user)";
+		if (typeof tabAnswer?.answer === "string" && tabAnswer.answer.trim()) {
+			answerText = tabAnswer.answer.trim();
+		} else if (Array.isArray(tabAnswer?.answer) && tabAnswer.answer.length > 0) {
+			answerText = tabAnswer.answer.map(formatAnswerForModel).join(", ");
+		} else if (tabAnswer?.answer && typeof tabAnswer.answer !== "string" && !Array.isArray(tabAnswer.answer)) {
 			answerText = formatAnswerForModel(tabAnswer.answer);
 		}
 
@@ -283,7 +293,12 @@ export function buildBatchResult(questions: QuestionDef[], answers: TabAnswer[])
 
 	return {
 		content: [{ type: "text" as const, text: lines.join("\n") }],
-		details: { status: "answered" as const, questions, answers } as BatchQuestionResultDetails,
+		details: {
+			status: "answered" as const,
+			questions,
+			answers,
+			...(skippedQuestionIndexes.length > 0 ? { skippedQuestionIndexes } : {}),
+		} as BatchQuestionResultDetails,
 	};
 }
 

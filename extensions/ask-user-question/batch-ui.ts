@@ -28,6 +28,7 @@ export class TabbedQuestions {
 	private keybindings: KeybindingsManager;
 	private tabChoiceLists: Map<number, WrappedChoiceList>;
 	private reviewing: boolean;
+	private partialReview: boolean;
 	private reviewScroll: number;
 	private feedback: string;
 	private clarificationEditor: ReturnType<typeof createQuestionEditor>;
@@ -53,6 +54,7 @@ export class TabbedQuestions {
 		this.choiceList = null;
 		this.tabChoiceLists = new Map();
 		this.reviewing = false;
+		this.partialReview = false;
 		this.reviewScroll = 0;
 		this.feedback = "";
 		this.clarificationMode = false;
@@ -191,7 +193,9 @@ export class TabbedQuestions {
 	}
 
 	private canRegenerate(): boolean {
-		const answeredCount = this.tabs.filter((tab) => this.isAnswered(tab)).length;
+		let answeredCount = this.tabs.filter((tab) => this.isAnswered(tab)).length;
+		const activeTab = this.getActiveTab();
+		if (this.editMode && !this.isAnswered(activeTab) && this.otherEditor.getText().trim()) answeredCount++;
 		return answeredCount > 0 && answeredCount < this.tabs.length;
 	}
 
@@ -251,6 +255,7 @@ export class TabbedQuestions {
 		this.feedback = "";
 		if (!this.reviewing) this.syncAnswerFromTab();
 		this.reviewing = false;
+		this.partialReview = false;
 		this.activeTab = index;
 		this.editMode = false;
 		this.noteFocused = false;
@@ -306,24 +311,38 @@ export class TabbedQuestions {
 		else this.openReview();
 	}
 
-	private openReview(): void {
-		this.syncAnswerFromTab();
-		for (let i = 0; i < this.tabs.length; i++) {
-			const tab = this.tabs[i];
-			if (!this.isAnswered(tab)) {
-				this.activeTab = i;
-				this.editMode = false;
-				this.noteFocused = false;
-				this.otherEditor.focused = false;
-				this.noteEditor.focused = false;
-				this.prepareActiveTab();
-				this.feedback = `Answer question ${i + 1} before Review.`;
-				this.invalidate();
-				this.tui.requestRender();
-				return;
+	private openReview(allowSkipped = false): void {
+		// Ctrl+Enter can be pressed from any editable field. Preserve the active
+		// draft before deciding which questions are answered.
+		if (this.editMode) this.saveOtherDraft();
+		else this.syncAnswerFromTab();
+
+		const answeredCount = this.tabs.filter((tab) => this.isAnswered(tab)).length;
+		if (allowSkipped && answeredCount === 0) {
+			this.feedback = "Answer a question first.";
+			this.invalidate();
+			this.tui.requestRender();
+			return;
+		}
+		if (!allowSkipped) {
+			for (let i = 0; i < this.tabs.length; i++) {
+				const tab = this.tabs[i];
+				if (!this.isAnswered(tab)) {
+					this.activeTab = i;
+					this.editMode = false;
+					this.noteFocused = false;
+					this.otherEditor.focused = false;
+					this.noteEditor.focused = false;
+					this.prepareActiveTab();
+					this.feedback = `Answer question ${i + 1} before Review.`;
+					this.invalidate();
+					this.tui.requestRender();
+					return;
+				}
 			}
 		}
 		this.reviewing = true;
+		this.partialReview = answeredCount < this.tabs.length;
 		this.reviewScroll = 0;
 		this.editMode = false;
 		this.noteFocused = false;
@@ -413,7 +432,8 @@ export class TabbedQuestions {
 			}
 			if (matchesKey(data, Key.enter)) return this.submitAll();
 			if (matchesKey(data, Key.escape) || matchesKey(data, Key.left) || data.toLowerCase() === "b") {
-				this.selectTab(this.tabs.length - 1);
+				const firstSkipped = this.tabs.findIndex((tab) => !this.isAnswered(tab));
+				this.selectTab(this.partialReview && firstSkipped >= 0 ? firstSkipped : this.tabs.length - 1);
 				return;
 			}
 			if (/^[1-9]$/.test(data)) this.selectTab(parseInt(data, 10) - 1);
@@ -424,8 +444,11 @@ export class TabbedQuestions {
 			this.regenerate();
 			return;
 		}
-		// Review is reached by confirming each question, not by a hidden shortcut.
-		if (matchesKey(data, Key.ctrl("enter")) || matchesKey(data, Key.alt("enter"))) return;
+		if (matchesKey(data, Key.ctrl("enter"))) {
+			this.openReview(true);
+			return;
+		}
+		if (matchesKey(data, Key.alt("enter"))) return;
 		if (this.editMode) {
 			if (matchesKey(data, Key.ctrl("c"))) {
 				this.otherEditor.setText("");
@@ -674,6 +697,7 @@ export class TabbedQuestions {
 		const indent = width > 1 ? " " : "";
 		const tokenBudget = Math.max(1, width - visibleWidth(indent));
 		const compactVariants = new Map<string, string[]>([
+			["Ctrl+Enter Review answered", ["^Enter Review"]],
 			["Ctrl+R Revise unanswered", ["Ctrl+R Revise"]],
 			["Answers entered", ["Has answers"]],
 			["Esc again to cancel", ["Esc again"]],
@@ -714,14 +738,17 @@ export class TabbedQuestions {
 			return lines;
 		}
 		const clarificationAction = ["Ctrl+? Ask agent"];
+		const partialActions = this.canRegenerate()
+			? ["Ctrl+Enter Review answered", "Ctrl+R Revise unanswered"]
+			: [];
 		if (this.editMode) {
-			row(["Editing", "Enter Save", "Ctrl+C Clear", ...clarificationAction, "Esc Back"], "accent");
+			row(["Editing", "Enter Save", "Ctrl+C Clear", ...partialActions, ...clarificationAction, "Esc Back"], "accent");
 			const minimumLines = width < 24 ? 5 : 2;
 			while (lines.length < minimumLines) lines.push("");
 			return lines;
 		}
 		if (this.noteFocused) {
-			row(["Note", "Tab Back", ...clarificationAction, "Esc Back"], "accent");
+			row(["Note", "Tab Back", ...partialActions, ...clarificationAction, "Esc Back"], "accent");
 			const minimumLines = width < 24 ? 5 : 2;
 			while (lines.length < minimumLines) lines.push("");
 			return lines;
@@ -745,12 +772,11 @@ export class TabbedQuestions {
 
 		row([...primary, ...clarificationAction, "Esc Cancel"], this.isAnswered(tab) ? "success" : "warning");
 
-		const revise = this.canRegenerate() ? ["Ctrl+R Revise unanswered"] : [];
 		const navigation = [...(tab.mode === "text" ? ["Ctrl+C Clear"] : []), "Tab Add note", "←→ Questions"];
-		const combined = [...revise, ...navigation];
+		const combined = [...partialActions, ...navigation];
 		if (width >= 24 && visibleWidth(combined.join(" · ")) + 1 <= width) row(combined);
 		else {
-			row(revise);
+			partialActions.forEach((action) => row([action]));
 			if (width < 24) navigation.forEach((action) => row([action]));
 			else row(navigation);
 		}
@@ -776,7 +802,7 @@ export class TabbedQuestions {
 		const stepCount = reviewStep + 1;
 		const activeStep = this.reviewing ? reviewStep : this.activeTab;
 		const answered = (index: number) => index === reviewStep
-			? this.tabs.every((candidate) => this.isAnswered(candidate))
+			? this.reviewing || this.tabs.every((candidate) => this.isAnswered(candidate))
 			: this.isAnswered(this.tabs[index]);
 		const hasNote = (index: number) => index < reviewStep && this.tabs[index].note.trim().length > 0;
 		const stepLabel = (index: number) => index === reviewStep
@@ -886,14 +912,21 @@ export class TabbedQuestions {
 		if (!compactHeight) lines.push("");
 
 		if (this.reviewing) {
-			add(th.fg("text", th.bold("Review your answers")));
+			const answeredCount = this.tabs.filter((candidate) => this.isAnswered(candidate)).length;
+			const skippedCount = this.tabs.length - answeredCount;
+			const reviewTitle = this.partialReview
+				? `Review ${answeredCount} ${answeredCount === 1 ? "answer" : "answers"} · ${skippedCount} skipped`
+				: "Review your answers";
+			add(th.fg("text", th.bold(reviewTitle)));
 			if (this.feedback) add(th.fg("warning", ` ${this.feedback}`));
 			lines.push("");
 			const summaryLines: string[] = [];
 			this.questions.forEach((question, index) => {
 				const tab = this.tabs[index];
 				const answers = Array.isArray(tab.answer) ? tab.answer : tab.answer ? [tab.answer] : [];
-				const summary = answers.map((answer) => typeof answer === "string" ? answer : answer.label).join(" · ") || "(no answer)";
+				const summary = this.isAnswered(tab)
+					? answers.map((answer) => typeof answer === "string" ? answer : answer.label).join(" · ")
+					: "(skipped)";
 				const questionPrefix = `${index + 1}. `;
 				addWrappedWithPrefix(
 					summaryLines,

@@ -707,8 +707,8 @@ assert.match(plainText(readinessFrames[0]!), /Enter Select/);
 assert.doesNotMatch(plainText(readinessFrames[0]!), /\d+ (?:unanswered|left)|Revise unanswered/);
 assert.match(plainText(readinessFrames[0]!), /Tab Add note[\s\S]*←→ Questions/);
 assert.doesNotMatch(plainText(readinessFrames[0]!), /Ctrl\+Enter|jump to review/i);
-assert.match(plainText(readinessFrames[1]!), /\(●\) 1\. One[\s\S]*Enter Next[\s\S]*Ctrl\+R Revise unanswered/);
-assert.match(plainText(readinessFrames[2]!), /Q2: Second readiness[\s\S]*Ctrl\+R Revise unanswered/);
+assert.match(plainText(readinessFrames[1]!), /\(●\) 1\. One[\s\S]*Enter Next[\s\S]*Ctrl\+Enter Review answered[\s\S]*Ctrl\+R Revise unanswered/);
+assert.match(plainText(readinessFrames[2]!), /Q2: Second readiness[\s\S]*Ctrl\+Enter Review answered[\s\S]*Ctrl\+R Revise unanswered/);
 assert.match(plainText(readinessFrames.at(-1)!), /Review your answers[\s\S]*Note: context/);
 assert.match(plainText(readinessFrames.at(-1)!), /Enter Submit/);
 
@@ -1125,8 +1125,8 @@ for (const [index, frame] of veryShortReview.slice(-4).entries()) {
 	assert.match(plainText(frame), /Enter Submit/, `${rows}-row review should preserve the submit affordance`);
 }
 
-// Ctrl+Enter is not a hidden jump to Review from a batch question or editor.
-const noReviewShortcut = await captureToolRender(
+// Ctrl+Enter explicitly reviews answered questions and marks the rest skipped.
+const partialSubmission = await executeCustomUI(
 	askMany,
 	{
 		questions: [
@@ -1134,11 +1134,47 @@ const noReviewShortcut = await captureToolRender(
 			{ question: "Needs an answer", options: [{ label: "Two" }] },
 		],
 	},
-	{ inputs: ["draft response", CTRL_ENTER] },
+	["draft response", CTRL_ENTER, "\r"],
 );
-const noReviewShortcutFrame = plainText(noReviewShortcut.at(-1)!);
-assert.match(noReviewShortcutFrame, /Q1: Open answer/);
-assert.doesNotMatch(noReviewShortcutFrame, /Review your answers|Ctrl\+Enter/);
+const partialReviewFrame = plainText(partialSubmission.snapshots.at(-1)!);
+assert.match(partialReviewFrame, /Review 1 answer · 1 skipped/);
+assert.match(partialReviewFrame, /draft response/);
+assert.match(partialReviewFrame, /\(skipped\)/);
+assert.match(partialReviewFrame, /Enter Submit/);
+assert.equal(partialSubmission.result.details.status, "answered");
+assert.deepEqual(partialSubmission.result.details.skippedQuestionIndexes, [1]);
+assert.match(partialSubmission.result.content[0].text, /User submitted 1 answer and skipped 1 question/);
+assert.match(partialSubmission.result.content[0].text, /Q2: Needs an answer\nAnswer: \(skipped by user\)/);
+const partialTranscript = askMany.renderResult!(partialSubmission.result, {}, transcriptTheme).render(80).join("\n");
+assert.match(partialTranscript, /✓ 1 answer · 1 skipped/);
+assert.match(partialTranscript, /Needs an answer\s+\(skipped\)/);
+
+const whitespacePartialSubmission = await executeCustomUI(
+	askMany,
+	{ questions: [{ question: "Answered text" }, { question: "Whitespace draft" }] },
+	["kept", "\r", "   ", CTRL_ENTER, "\r"],
+);
+assert.match(plainText(whitespacePartialSubmission.snapshots.at(-1)!), /Whitespace draft[\s\S]*\(skipped\)/);
+assert.deepEqual(whitespacePartialSubmission.result.details.skippedQuestionIndexes, [1]);
+const whitespacePartialTranscript = askMany.renderResult!(whitespacePartialSubmission.result, {}, transcriptTheme).render(80).join("\n");
+assert.match(whitespacePartialTranscript, /Whitespace draft\s+\(skipped\)/);
+assert.doesNotMatch(whitespacePartialTranscript, /empty response/);
+
+const emptyPartialReview = await captureToolRender(
+	askMany,
+	{ questions: [{ question: "Still unanswered" }, { question: "Also unanswered" }] },
+	{ inputs: [CTRL_ENTER], widths: [80] },
+);
+assert.match(plainText(emptyPartialReview.at(-1)!), /Still unanswered[\s\S]*Answer a question first\./);
+assert.doesNotMatch(plainText(emptyPartialReview.at(-1)!), /Review \d+ answers/);
+
+const partialReviewBack = await captureToolRender(
+	askMany,
+	{ questions: [{ question: "Answered first" }, { question: "First skipped" }, { question: "Also skipped" }] },
+	{ inputs: ["ready", CTRL_ENTER, "\x1b"], widths: [80] },
+);
+assert.match(plainText(partialReviewBack.at(-1)!), /Q2: First skipped/);
+assert.doesNotMatch(plainText(partialReviewBack.at(-1)!), /Review 1 answer/);
 
 const batchNoteTranscript = askMany.renderResult!(batchNote.result, {}, transcriptTheme).render(80).join("\n");
 assert.match(batchNoteTranscript, /1  Batch choice\s+Alpha\s+Note\s+Batch note/);
@@ -1481,15 +1517,19 @@ assert.match(savedCustomFrame, /BEGINNING/);
 assert.match(savedCustomFrame, /ENDING/);
 assert.match(savedCustomFrame, /Enter Submit/);
 
-// Ctrl+Enter does not bypass the normal save, advance, and Review sequence.
+// Ctrl+Enter commits an in-progress custom answer before opening Review.
 const customCtrlSubmit = await captureToolRender(
 	askMany,
-	{ questions: [{ question: "Custom and submit", options: [{ label: "Preset" }] }] },
+	{ questions: [
+		{ question: "Custom and submit", options: [{ label: "Preset" }] },
+		{ question: "Skip this one", options: [{ label: "Later" }] },
+	] },
 	{ inputs: ["2", "Keep editing this custom answer", CTRL_ENTER], widths: [80] },
 );
+assert.match(plainText(customCtrlSubmit.at(-2)!), /Editing[\s\S]*Ctrl\+Enter Review answered/);
+assert.match(plainText(customCtrlSubmit.at(-1)!), /Review 1 answer · 1 skipped/);
 assert.match(plainText(customCtrlSubmit.at(-1)!), /Keep editing this custom answer/);
-assert.match(plainText(customCtrlSubmit.at(-1)!), /Editing/);
-assert.doesNotMatch(plainText(customCtrlSubmit.at(-1)!), /Review your answers/);
+assert.match(plainText(customCtrlSubmit.at(-1)!), /Enter Submit/);
 
 for (const scenario of [
 	{

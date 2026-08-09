@@ -158,14 +158,14 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 		name: "ask_questions",
 		label: "ask_questions",
 		description:
-			"Ask the user multiple related questions in a tabbed interface. A single Submit action finalizes all answers.",
+			"Ask the user multiple related questions in a tabbed interface. A single Submit action finalizes completed answers; the user may explicitly skip the rest.",
 		promptSnippet:
 			"Use this tool to ask multiple related questions at once in a tabbed batch interface.",
 		promptGuidelines: [
 			"Use ask_questions for 2+ related questions where the answers are needed together. For a single question, use ask_user_question instead.",
 			"Provide options for choice and decision questions; omit options for open-ended prompts that ask the user to describe, explain, or share an experience. Use multiSelect only with options.",
 			"Add a short label for semantic progress when useful; notes are optional.",
-			"The user reviews every answer before an explicit Submit. Use recommended: true for a recommendation; custom answers remain distinct.",
+			"The user reviews completed answers before an explicit Submit and may intentionally skip unanswered questions. Use recommended: true for a recommendation; custom answers remain distinct.",
 			"If the result status is regenerate, use the answered entries and notes as new understanding, do not repeat resolved questions, and immediately call ask_questions again with revised unanswered questions only.",
 			"If ask_questions returns clarification_requested, answer the clarification, keep resolved answers as context, and immediately call ask_questions again with revised unanswered questions only.",
 		],
@@ -242,26 +242,33 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 				return new Text(theme.fg("accent", "↪ Clarification requested"), 0, 0);
 			}
 
-			const count = details.questions.length;
-			const noun = count === 1 ? "answer" : "answers";
+			const questionCount = details.questions.length;
+			const skippedIndexes = new Set(details.skippedQuestionIndexes ?? []);
+			const answerCount = questionCount - skippedIndexes.size;
+			const noun = answerCount === 1 ? "answer" : "answers";
 			return {
 				invalidate(): void {},
 				render(width: number): string[] {
 					const lines: string[] = [];
-					addWrappedWithPrefix(lines, "", theme.fg("success", `✓ ${count} ${noun}`), width, "");
-					for (let index = 0; index < count; index++) {
+					const heading = skippedIndexes.size > 0
+						? `✓ ${answerCount} ${noun} · ${skippedIndexes.size} skipped`
+						: `✓ ${answerCount} ${noun}`;
+					addWrappedWithPrefix(lines, "", theme.fg("success", heading), width, "");
+					for (let index = 0; index < questionCount; index++) {
 						const tabAnswer = details.answers.find((answer) => answer.questionIndex === index);
 						if (!tabAnswer) continue;
 
 						let labels: string[];
-						if (typeof tabAnswer.answer === "string") {
+						if (skippedIndexes.has(index)) {
+							labels = ["(skipped)"];
+						} else if (typeof tabAnswer.answer === "string") {
 							labels = [sanitizeDisplayText(tabAnswer.answer) || "(empty response)"];
 						} else if (Array.isArray(tabAnswer.answer)) {
 							labels = tabAnswer.answer.map((answer) => sanitizeDisplayText(answer.label) || "(empty response)");
 						} else if (tabAnswer.answer && typeof tabAnswer.answer === "object") {
 							labels = [sanitizeDisplayText(tabAnswer.answer.label) || "(empty response)"];
 						} else {
-							labels = ["(no response)"];
+							labels = [skippedIndexes.has(index) ? "(skipped)" : "(no response)"];
 						}
 
 						const questionPrefix = `  ${theme.fg("dim", `${index + 1}`)}  `;
