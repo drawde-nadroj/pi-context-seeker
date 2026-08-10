@@ -9,7 +9,7 @@ call out the unknown!
 - regenerate remaining questions based on answers and notes (if q1 changes direction, that context carries forward)
 - ask for clarity between questions (never answer a question you don't understand!)
 - stop anytime and submit only what you've answered (you're free!)
-- recommended options first if you're more of a glancer 
+- recommended options show first if you're more of a glancer 
 - shared understanding, less assumptions, it's always cheaper to ask!
 
 - already interested? check out [installation](#installation)! hope you enjoy :)
