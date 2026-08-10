@@ -30,7 +30,16 @@ export type AskAnswer = TextAnswer | OptionAnswer | OtherAnswer;
 export type AskUserQuestionStatus = "answered" | "cancelled" | "unavailable" | "regenerate" | "clarification_requested";
 export type AskUserQuestionMode = "text" | "single-select" | "multi-select";
 
+export interface PublicQuestionDef {
+	question: string;
+	label?: string;
+	details?: string;
+	options?: Array<{ label: string; value?: string; description?: string; recommended?: boolean }>;
+	multiSelect?: boolean;
+}
+
 export interface QuestionDef {
+	id?: string;
 	question: string;
 	label?: string;
 	details?: string;
@@ -44,17 +53,48 @@ export interface TabAnswer {
 	note?: string;
 }
 
+export interface ClarificationTurn {
+	role: "user" | "assistant";
+	content: string;
+}
+
+export interface SerializedTabState {
+	questionIndex: number;
+	mode: AskUserQuestionMode;
+	answer: AskAnswer | AskAnswer[] | string | null;
+	textBuffer: string;
+	otherText: string;
+	selected: AskAnswer[];
+	note: string;
+}
+
+export interface BatchContinuation {
+	questions: QuestionDef[];
+	tabs: SerializedTabState[];
+	activeQuestionIndex: number;
+	originQuestionId: string;
+	editingOtherQuestionId?: string;
+	clarificationTurns: ClarificationTurn[];
+	clarificationOpen?: boolean;
+	updatedQuestionIds: string[];
+}
+
 export interface BatchQuestionResultDetails {
 	status: AskUserQuestionStatus;
-	questions: QuestionDef[];
+	questions: PublicQuestionDef[];
 	answers: TabAnswer[];
-	unansweredQuestions?: QuestionDef[];
+	unansweredQuestions?: PublicQuestionDef[];
 	unansweredNotes?: Array<{ questionIndex: number; note: string }>;
 	skippedQuestionIndexes?: number[];
 	clarification?: string;
 	activeQuestionIndex?: number;
+	questionIndex?: number;
 	activeDraft?: TabAnswer;
 	message?: string;
+	continuationId?: string;
+	revision?: number;
+	continuation?: BatchContinuation;
+	continuationState?: "awaiting-response" | "completed" | "cancelled" | "regenerated" | "unavailable";
 }
 
 export interface AskUserQuestionResultDetails {
@@ -128,38 +168,45 @@ export const AskUserQuestionParams = Type.Object({
 	),
 });
 
+export const BatchQuestionSchema = Type.Object({
+	question: Type.String({ description: "The question text to display." }),
+	label: Type.Optional(Type.String({ description: "Short semantic label used in batch progress, such as Database or Auth." })),
+	details: Type.Optional(Type.String({ description: "Optional extra context or instructions shown under the question." })),
+	options: Type.Optional(Type.Array(OptionSchema, { description: "Distinct viable choices. Mark at most one option as recommended. Omit for free text.", minItems: 1 })),
+	multiSelect: Type.Optional(Type.Boolean({ description: "Allow multiple answers." })),
+});
+
+const BatchQuestionsSchema = Type.Array(BatchQuestionSchema, {
+	description: "Questions to display in the tabbed interface.",
+	minItems: 1,
+});
+const ContinuationIdSchema = Type.String({ description: "Opaque continuation ID returned by a clarification result." });
+const ContinuationRevisionSchema = Type.Integer({ description: "Exact awaiting-response revision returned by that result.", minimum: 1 });
+const ContinuationResponseSchema = Type.String({ description: "The assistant's answer to the user's clarification." });
+const QuestionRevisionsSchema = Type.Array(Type.Object({
+	questionNumber: Type.Integer({ description: "Public one-based question number to replace.", minimum: 1 }),
+	question: Type.String({ description: "Complete replacement question text." }),
+	label: Type.Optional(Type.String({ description: "Optional short semantic label." })),
+	details: Type.Optional(Type.String({ description: "Optional extra context." })),
+	options: Type.Optional(Type.Array(OptionSchema, { minItems: 1 })),
+	multiSelect: Type.Optional(Type.Boolean()),
+}), { description: "Sparse complete replacements for eligible later questions. Use [] when no question changes are needed." });
+
+// The optional resume fields keep pre-reload ask_questions contracts executable.
+// execute() enforces exactly one complete mode without Google-incompatible unions.
 export const AskQuestionsParams = Type.Object({
-	questions: Type.Array(
-		Type.Object({
-			question: Type.String({
-				description: "The question text to display.",
-			}),
-			label: Type.Optional(
-				Type.String({ description: "Short semantic label used in batch progress, such as Database or Auth." }),
-			),
-			details: Type.Optional(
-				Type.String({
-					description: "Optional extra context or instructions shown under the question.",
-				}),
-			),
-			options: Type.Optional(
-				Type.Array(OptionSchema, {
-					description:
-						"Distinct viable choices for this decision question. Mark at most one option as recommended per question. Omit this field for an open-ended prompt that should use a multiline free-form response. When provided, the UI also offers Something else….",
-					minItems: 1,
-				}),
-			),
-			multiSelect: Type.Optional(
-				Type.Boolean({
-					description: "Set to true to allow multiple answers to be selected for this question.",
-				}),
-			),
-		}),
-		{
-			description: "Array of questions to display in tabbed interface. At least one question is required.",
-			minItems: 1,
-		},
-	),
+	questions: Type.Optional(BatchQuestionsSchema),
+	continuationId: Type.Optional(ContinuationIdSchema),
+	revision: Type.Optional(ContinuationRevisionSchema),
+	response: Type.Optional(ContinuationResponseSchema),
+	revisions: Type.Optional(QuestionRevisionsSchema),
+});
+
+export const ResumeQuestionsParams = Type.Object({
+	continuationId: ContinuationIdSchema,
+	revision: ContinuationRevisionSchema,
+	response: ContinuationResponseSchema,
+	revisions: QuestionRevisionsSchema,
 });
 
 export function countRecommendedOptions(options: Array<{ label: string; recommended?: boolean }> | undefined): number {
@@ -254,36 +301,60 @@ export function unavailableResult(question: string, mode: AskUserQuestionMode, m
 	};
 }
 
+export function toPublicQuestions(questions: QuestionDef[]): PublicQuestionDef[] {
+	return questions.map((question) => ({
+		question: question.question,
+		...(question.label ? { label: question.label } : {}),
+		...(question.details ? { details: question.details } : {}),
+		...(question.mode === "text" ? {} : {
+			options: question.options.map(({ label, value, description, recommended }) => ({
+				label,
+				...(value !== label ? { value } : {}),
+				...(description ? { description } : {}),
+				...(recommended ? { recommended: true } : {}),
+			})),
+			...(question.mode === "multi-select" ? { multiSelect: true } : {}),
+		}),
+	}));
+}
+
+function withoutInternalIds(questions: QuestionDef[]): PublicQuestionDef[] {
+	return toPublicQuestions(questions);
+}
+
 export function batchCancelledResult(questions: QuestionDef[]) {
+	const publicQuestions = withoutInternalIds(questions);
 	const message = "Questions cancelled.";
 	return {
 		content: [{ type: "text" as const, text: message }],
-		details: { status: "cancelled" as const, questions, answers: [], message } as BatchQuestionResultDetails,
+		details: { status: "cancelled" as const, questions: publicQuestions, answers: [], message } as BatchQuestionResultDetails,
 	};
 }
 
 export function batchUnavailableResult(questions: QuestionDef[]) {
+	const publicQuestions = withoutInternalIds(questions);
 	const message = "ask_questions requires interactive TUI mode";
 	return {
 		content: [{ type: "text" as const, text: message }],
-		details: { status: "unavailable" as const, questions, answers: [] } as BatchQuestionResultDetails,
+		details: { status: "unavailable" as const, questions: publicQuestions, answers: [] } as BatchQuestionResultDetails,
 	};
 }
 
 export function buildBatchResult(questions: QuestionDef[], answers: TabAnswer[]) {
+	const publicQuestions = withoutInternalIds(questions);
 	const isAnswered = (entry: TabAnswer | undefined) => {
 		if (typeof entry?.answer === "string") return entry.answer.trim().length > 0;
 		return entry?.answer !== null && entry?.answer !== undefined && (!Array.isArray(entry.answer) || entry.answer.length > 0);
 	};
-	const skippedQuestionIndexes = questions
+	const skippedQuestionIndexes = publicQuestions
 		.map((_question, index) => index)
 		.filter((index) => !isAnswered(answers.find((answer) => answer.questionIndex === index)));
-	const answeredCount = questions.length - skippedQuestionIndexes.length;
+	const answeredCount = publicQuestions.length - skippedQuestionIndexes.length;
 	const lines = skippedQuestionIndexes.length > 0
 		? [`User submitted ${answeredCount} ${answeredCount === 1 ? "answer" : "answers"} and skipped ${skippedQuestionIndexes.length} ${skippedQuestionIndexes.length === 1 ? "question" : "questions"}.`]
-		: [`User answered all ${questions.length} questions.`];
+		: [`User answered all ${publicQuestions.length} questions.`];
 
-	questions.forEach((question, questionIndex) => {
+	publicQuestions.forEach((question, questionIndex) => {
 		const tabAnswer = answers.find((answer) => answer.questionIndex === questionIndex);
 		let answerText = "(skipped by user)";
 		if (typeof tabAnswer?.answer === "string" && tabAnswer.answer.trim()) {
@@ -303,7 +374,7 @@ export function buildBatchResult(questions: QuestionDef[], answers: TabAnswer[])
 		content: [{ type: "text" as const, text: lines.join("\n") }],
 		details: {
 			status: "answered" as const,
-			questions,
+			questions: publicQuestions,
 			answers,
 			...(skippedQuestionIndexes.length > 0 ? { skippedQuestionIndexes } : {}),
 		} as BatchQuestionResultDetails,
@@ -311,12 +382,13 @@ export function buildBatchResult(questions: QuestionDef[], answers: TabAnswer[])
 }
 
 export function buildRegenerateResult(questions: QuestionDef[], answers: TabAnswer[]) {
+	const publicQuestions = withoutInternalIds(questions);
 	const answered = answers.filter((entry): entry is TabAnswer & { answer: Exclude<TabAnswer["answer"], null> } => {
 		if (typeof entry.answer === "string") return entry.answer.trim().length > 0;
 		return entry.answer !== null && (!Array.isArray(entry.answer) || entry.answer.length > 0);
 	});
 	const answeredIndexes = new Set(answered.map((entry) => entry.questionIndex));
-	const unansweredQuestions = questions.filter((_question, index) => !answeredIndexes.has(index));
+	const unansweredQuestions = publicQuestions.filter((_question, index) => !answeredIndexes.has(index));
 	const unansweredNotes = answers
 		.filter((entry) => !answeredIndexes.has(entry.questionIndex) && entry.note?.trim())
 		.map((entry) => ({ questionIndex: entry.questionIndex, note: entry.note!.trim() }));
@@ -353,7 +425,7 @@ export function buildRegenerateResult(questions: QuestionDef[], answers: TabAnsw
 		content: [{ type: "text" as const, text: lines.join("\n") }],
 		details: {
 			status: "regenerate" as const,
-			questions,
+			questions: publicQuestions,
 			answers: answered,
 			unansweredQuestions,
 			unansweredNotes,
@@ -384,37 +456,65 @@ export function buildClarificationResult(
 	};
 }
 
-export function buildBatchClarificationResult(questions: QuestionDef[], answers: TabAnswer[], activeQuestionIndex: number, clarification: string) {
-	const activeDraft = answers.find((entry) => entry.questionIndex === activeQuestionIndex);
-	const unresolvedAnswers = answers.map((entry) => entry.questionIndex === activeQuestionIndex
-		? { ...entry, answer: null }
-		: entry);
-	const base = buildRegenerateResult(questions, unresolvedAnswers);
+export function revisionProtectionReason(continuation: BatchContinuation, index: number): string | undefined {
+	const originIndex = continuation.questions.findIndex((question) => question.id === continuation.originQuestionId);
+	if (index <= originIndex) return index === originIndex ? "clarification origin" : "at or before clarification origin";
+	const tab = continuation.tabs[index];
+	if (!tab) return "missing state";
+	const committed = typeof tab.answer === "string" ? tab.answer.trim().length > 0 : tab.answer !== null && (!Array.isArray(tab.answer) || tab.answer.length > 0);
+	if (committed) return "has a committed answer";
+	if (tab.textBuffer.trim()) return "has a text draft";
+	if (tab.otherText.trim()) return "has a custom draft";
+	if (tab.note.trim()) return "has a note";
+	if (tab.selected.length > 0) return "has a tentative selection";
+	return undefined;
+}
+
+export function buildBatchClarificationResult(continuationId: string, revision: number, continuation: BatchContinuation, clarification: string) {
+	const originIndex = continuation.questions.findIndex((question) => question.id === continuation.originQuestionId);
 	const lines = [
-		`The user paused the batch to ask: ${clarification}`,
-		"Answer the clarification in normal assistant text, then immediately call ask_questions again with regenerated unanswered questions only before continuing work.",
-		"Do not repeat resolved questions. Committed answers and notes are resolved context.",
-		`Current unresolved question: Q${activeQuestionIndex + 1}: ${questions[activeQuestionIndex]?.question ?? "(unknown)"}`,
+		`The user paused at Q${originIndex + 1} to ask: ${clarification}`,
+		`This is the batch's shared clarification thread. Interpret the request using the full batch and every current answer, draft, custom answer, and note. Q${originIndex + 1} is the origin only for revision eligibility and resume position, not a reference restriction.`,
+		"Questions and revision eligibility:",
 	];
-	const activeDraftAnswer = activeDraft?.answer;
-	if (typeof activeDraftAnswer === "string") {
-		if (activeDraftAnswer.trim()) lines.push(`Current draft: ${activeDraftAnswer.trim()}`);
-	} else if (Array.isArray(activeDraftAnswer)) {
-		if (activeDraftAnswer.length > 0) lines.push(`Current draft: ${activeDraftAnswer.map(formatAnswerForModel).join(", ")}`);
-	} else if (activeDraftAnswer) {
-		lines.push(`Current draft: ${formatAnswerForModel(activeDraftAnswer)}`);
-	}
-	lines.push(base.content[0].text);
+	toPublicQuestions(continuation.questions).forEach((question, index) => {
+		const reason = revisionProtectionReason(continuation, index);
+		const tab = continuation.tabs[index];
+		lines.push(`Q${index + 1}: ${JSON.stringify(question)}`);
+		if (tab) {
+			const answer = typeof tab.answer === "string"
+				? tab.answer.trim()
+				: tab.answer
+					? (Array.isArray(tab.answer) ? tab.answer : [tab.answer]).map(formatAnswerForModel).join(", ")
+					: "";
+			lines.push(`Current answer: ${answer || "(none)"}`);
+			if (tab.textBuffer.trim() && tab.textBuffer.trim() !== answer) lines.push(`Current draft: ${tab.textBuffer.trim()}`);
+			if (tab.otherText.trim()) lines.push(`Current custom text: ${tab.otherText.trim()}`);
+			if (tab.note.trim()) lines.push(`Current note: ${tab.note.trim()}`);
+		}
+		lines.push(reason ? `Eligibility: protected — ${reason}.` : "Eligibility: eligible for revision.");
+	});
+	lines.push(
+		"Answer the clarification normally, then make one atomic resume_questions call with continuationId, revision, response, and every relevant eligible later revision.",
+		"Use revisions: [] when none are needed. Each revision must use questionNumber and a complete public question definition; never send internal IDs.",
+		`Continuation ID: ${continuationId}`,
+		`Revision: ${revision}`,
+	);
 	return {
 		content: [{ type: "text" as const, text: lines.join("\n") }],
 		details: {
-			...base.details,
 			status: "clarification_requested" as const,
+			questions: toPublicQuestions(continuation.questions),
+			answers: continuation.tabs.map((tab) => ({ questionIndex: tab.questionIndex, answer: tab.answer, note: tab.note })),
 			clarification,
-			activeQuestionIndex,
-			activeDraft,
-			message: lines.slice(0, 3).join(" "),
-		},
+			activeQuestionIndex: continuation.activeQuestionIndex,
+			questionIndex: originIndex,
+			continuationId,
+			revision,
+			continuation,
+			continuationState: "awaiting-response" as const,
+			message: lines.slice(0, 2).join(" "),
+		} as BatchQuestionResultDetails,
 	};
 }
 

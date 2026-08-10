@@ -33,10 +33,11 @@ Adaptive questions for building shared context with the [Pi Coding Agent](https:
 - **Review the whole batch before submitting it.** Catch accidental choices and see related decisions together before committing them to the conversation.
 - **Spend context on decisions, not repairs.** Batch related unknowns, preserve resolved answers, and regenerate only what is stale instead of burning tokens on repeated clarification or work based on bad assumptions.
 
-The package exposes two tools:
+The package exposes three tools:
 
 - **`ask_user_question`** asks one free-form, single-choice, or multiple-choice question.
-- **`ask_questions`** collects several related answers in a tabbed form and submits them together.
+- **`ask_questions`** starts on the first question, lets you move through related questions, and submits them together after review. It also accepts resume-shaped arguments only as a compatibility path for conversations whose tool list predates `resume_questions`.
+- **`resume_questions`** is the canonical continuation-only tool the agent uses after a paused batch clarification. It can atomically revise only clean later questions while preserving batch identity, numbering, drafts, answers, and notes.
 
 ## Best usage: ask after every request
 
@@ -46,7 +47,7 @@ Append a prompt like this to every request:
 
 Give the agent as much relevant context as you can, especially context already shared in the conversation or project. The agent can use `ask_questions` to turn the remaining unknowns into one focused batch instead of guessing, repeatedly interrupting the work, or filling the conversation with misunderstood assumptions. This also makes the model think about what it needs to help you think—not only what it needs to execute the request.
 
-More useful context usually produces better work. A question batch creates a quick path to shared understanding: answer what you know, add notes where nuance matters, and ask the agent for clarification from inside any question you do not understand.
+More useful context usually produces better work. A question batch creates a quick path to shared understanding: answer what you know, add notes where nuance matters, and open an inline clarification on the current question. The agent can then resume the same frame with your transcript and state intact, while adapting only clean later questions that the clarification made stale.
 
 ### Regenerate unanswered questions
 
@@ -71,8 +72,8 @@ The dialog is also a small context editor. It gives you control over both the sh
 - **Free-form answers preserve depth.** Open-ended questions use a multiline editor instead of forcing nuanced input into a menu.
 - **Notes separate the rule from the exception.** Keep the main answer easy to interpret while attaching caveats, conditions, or reasoning to that question.
 - **Review prevents accidental context.** A batch is not final until you inspect and submit it.
-- **Clarification prevents false agreement.** Ask the agent what a question means before committing an answer to something you may have misunderstood.
-- **Regeneration keeps context current.** Resolved answers remain explicit context while stale unanswered questions are regenerated rather than silently becoming assumptions.
+- **Clarification prevents false agreement.** Ask from the current question without leaving its frame. A read-only Preview browses one complete referenced question at a time, and clean later questions may be sparsely adapted when the agent resumes.
+- **Regeneration keeps context current.** Ctrl+R remains the separate broader flow: resolved answers remain explicit context while the remaining batch is regenerated.
 
 The result is higher-signal conversation history. Instead of mixing requirements, uncertainty, corrections, and guesses into one long message, the tool returns structured answers and notes that show what you chose, what you qualified, and what still needs work.
 
@@ -226,7 +227,12 @@ Controls vary with the active field; the UI shows the available actions.
 - **Escape**: go back, clear/cancel, or require a second press when answers would be discarded
 - **Ctrl+Enter** (batch): review answered questions and mark the rest skipped
 - **Ctrl+R**: regenerate unanswered batch questions when some questions are already resolved
-- **Ctrl+?** (Ctrl+/ equivalent): ask the agent for clarification; Enter sends it and Escape returns
+- **Ctrl+?** (Ctrl+/ equivalent): expand clarification inline below the current question; the editor receives focus immediately
+- **Tab / Shift+Tab** (inline clarification): enter a read-only **Preview**, or return to Compose with the draft and insertion point unchanged
+- **Left / Right** (Preview): browse one complete question at a time, wrapping at both ends without changing the active question or answer state
+- **Up / Down, PageUp / PageDown** (Preview): move through the normal read-only choice window when needed
+- **Enter** (Compose only): submit; Preview ignores text and submit keys. **Escape** closes clarification in one step and keeps the last previewed question active
+- The batch keeps one shared clarification transcript in continuation data without rendering it in the question frame. The immutable opening question controls resume position and later-question revision eligibility. Revised clean later questions show **Updated** until you first interact with them.
 
 ## Non-TUI behavior
 

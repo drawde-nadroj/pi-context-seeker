@@ -444,7 +444,7 @@ const batchFreeForm = await executeCustomUI(
 	},
 	["First part", "\n", "Second part", "\r", "\r", "\r", "\r"],
 );
-assert.equal(batchFreeForm.result.details.questions[0].mode, "text");
+assert.equal(batchFreeForm.result.details.questions[0].mode, undefined, "public question definitions omit internal tab mode");
 assert.equal(batchFreeForm.result.details.answers[0].answer, "First part\nSecond part");
 assert.match(batchFreeForm.result.content[0]!.text, /Q1: Describe your experience\nAnswer: First part\nSecond part/);
 
@@ -879,7 +879,7 @@ const cancellationTools: any = registerTools([], cancellationEntries);
 const untouchedBatchCancel = await executeCustomUI(
 	cancellationTools.get("ask_questions")!,
 	{ questions: [{ question: "Untouched cancel", options: [{ label: "Alpha" }] }] },
-	["\x1b"],
+	["\x1b", "\x1b"],
 );
 assert.equal(untouchedBatchCancel.result.details.status, "cancelled");
 assert.equal(untouchedBatchCancel.submissions.length, 1);
@@ -890,11 +890,9 @@ assert.deepEqual(cancellationEntries, [], "cancelled batches should not persist 
 const armedBatchCancel = await executeCustomUI(
 	askMany,
 	{ questions: [{ question: "Confirm cancel", options: [{ label: "Alpha" }] }] },
-	["1", "\x1b", DOWN, "\x1b", "\x1b"],
+	["1", "\x1b", "\x1b"],
 );
-assert.match(plainText(armedBatchCancel.snapshots[2]!), /Answers entered[\s\S]*Esc again to cancel/);
-assert.doesNotMatch(plainText(armedBatchCancel.snapshots[3]!), /Esc again to cancel/);
-assert.match(plainText(armedBatchCancel.snapshots[4]!), /Answers entered[\s\S]*Esc again to cancel/);
+assert.match(plainText(armedBatchCancel.snapshots[2]!), /Esc again to cancel/);
 assert.equal(armedBatchCancel.result.details.status, "cancelled");
 assert.equal(armedBatchCancel.submissions.length, 1);
 
@@ -905,10 +903,9 @@ for (const [name, inputs] of [
 	const cancelled = await executeCustomUI(
 		askMany,
 		{ questions: [{ question: `Cancel ${name}`, options: [{ label: "Alpha" }] }] },
-		[...inputs],
+		[...inputs, "\x1b"],
 	);
-	assert.match(plainText(cancelled.snapshots.at(-2)!), /Answers entered[\s\S]*Esc again to cancel/);
-	assert.equal(cancelled.result.details.status, "cancelled", `${name} should require confirmed cancellation`);
+	assert.equal(cancelled.result.details.status, "cancelled", `${name} should preserve two-step cancellation after work`);
 }
 
 // Enter on a saved custom multi-answer reopens it for in-place editing; Space
@@ -1307,10 +1304,8 @@ assert.equal(regenerated.result.details.answers[0].questionIndex, 0);
 assert.equal(regenerated.result.details.answers[0].note, "important note");
 assert.deepEqual(regenerated.result.details.unansweredQuestions, [{
 	question: "Needs regeneration",
-	label: undefined,
 	details: "Original context",
-	mode: "single-select",
-	options: [{ label: "Beta", value: "Beta", description: undefined, recommended: undefined }],
+	options: [{ label: "Beta" }],
 }]);
 assert.match(regenerated.result.content[0].text, /Do not repeat resolved questions/);
 assert.match(regenerated.result.content[0].text, /Immediately call ask_questions again with regenerated unanswered questions only/);
@@ -1383,7 +1378,7 @@ for (const scenario of [
 		expected: [/Note/, /Tab Back/, /Esc Back/],
 	},
 	{
-		name: "cancel warning",
+		name: "detail cancel warning",
 		params: regenerateParams,
 		inputs: ["\r", "\x1b"],
 		expected: [/Answers entered/, /Esc again to cancel/],
@@ -1575,11 +1570,11 @@ const semanticFooter = await captureToolRender(
 );
 const initialFooterRaw = semanticFooter[0]!.join("\n");
 assert.match(initialFooterRaw, /\x1b\[35m[^\n]*Enter Select/);
-assert.match(initialFooterRaw, /\x1b\[90m[^\n]*Ctrl\+\? Ask agent/);
+assert.match(initialFooterRaw, /\x1b\[90m[^\n]*Ctrl\+\? Clarify/);
 assert.match(initialFooterRaw, /\x1b\[90m[^\n]*Esc Cancel/);
 const readyFooterRaw = semanticFooter[1]!.join("\n");
 assert.match(readyFooterRaw, /\x1b\[32m[^\n]*Enter Review/);
-assert.match(readyFooterRaw, /\x1b\[90m[^\n]*Ctrl\+\? Ask agent/);
+assert.match(readyFooterRaw, /\x1b\[90m[^\n]*Ctrl\+\? Clarify/);
 const reviewFooterRaw = semanticFooter.at(-1)!.join("\n");
 assert.match(reviewFooterRaw, /\x1b\[32m[^\n]*✓ Ready/);
 assert.match(reviewFooterRaw, /\x1b\[32m[^\n]*Enter Submit/);
@@ -1867,7 +1862,7 @@ const standaloneClarification = await executeCustomUI(
 	{ question: "Choose runtime", details: "For production", options: [{ label: "Node", value: "node", recommended: true }] },
 	["\r", CTRL_QUESTION, "\r", "\x1b", CTRL_QUESTION, "Why is this best?", "\r"],
 );
-assert.match(plainText(standaloneClarification.snapshots[0]!), /Ctrl\+\? Ask agent/);
+assert.match(plainText(standaloneClarification.snapshots[0]!), /Ctrl\+\? Clarify this question/);
 assert.match(plainText(standaloneClarification.snapshots[2]!), /What do you want to ask the\s+agent\?/);
 assert.match(plainText(standaloneClarification.snapshots[3]!), /Question required\./);
 assert.match(plainText(standaloneClarification.snapshots[4]!), /Choose runtime/);
@@ -1906,15 +1901,15 @@ const batchClarification = await executeCustomUI(
 	] },
 	["\r", TAB, "Keep durable", TAB, "\r", CTRL_QUESTION, "Can Redis be omitted?", "\r"],
 );
-assert.match(plainText(batchClarification.snapshots[0]!), /Ctrl\+\? Ask agent/);
+assert.match(plainText(batchClarification.snapshots[0]!), /Ctrl\+\? Clarify/);
 assert.equal(batchClarification.result.details.status, "clarification_requested");
 assert.equal(batchClarification.result.details.activeQuestionIndex, 1);
 assert.equal((batchClarification.result.details.answers[0].answer as any).label, "Postgres");
 assert.equal(batchClarification.result.details.answers[0].note, "Keep durable");
-assert.deepEqual(batchClarification.result.details.unansweredQuestions.map((q: any) => q.question), ["Pick cache"]);
-assert.match(batchClarification.result.content[0].text, /Current unresolved question: Q2: Pick cache/);
-assert.match(batchClarification.result.content[0].text, /Do not repeat resolved questions/);
-assert.match(batchClarification.result.content[0].text, /immediately call ask_questions again with regenerated unanswered questions only/);
+assert.equal(batchClarification.result.details.continuation.activeQuestionIndex, 1);
+assert.equal(batchClarification.result.details.continuation.tabs[0].note, "Keep durable");
+assert.match(batchClarification.result.content[0].text, /one atomic resume_questions call/);
+assert.match(batchClarification.result.content[0].text, /revisions: \[\]/);
 
 // The current tab remains the question to revisit even if it already has a
 // staged answer; its semantic draft is returned instead of being called resolved.
@@ -1923,9 +1918,8 @@ const answeredBatchClarification = await executeCustomUI(
 	{ questions: [{ question: "Only question", options: [{ label: "Draft choice" }] }] },
 	["\r", CTRL_QUESTION, "Can you explain the tradeoff?", "\r"],
 );
-assert.match(plainText(answeredBatchClarification.snapshots[1]!), /Ctrl\+\? Ask agent/);
+assert.match(plainText(answeredBatchClarification.snapshots[1]!), /Ctrl\+\? Clarify/);
 assert.equal(answeredBatchClarification.result.details.status, "clarification_requested");
-assert.deepEqual(answeredBatchClarification.result.details.unansweredQuestions.map((q: any) => q.question), ["Only question"]);
-assert.equal(answeredBatchClarification.result.details.answers.length, 0);
-assert.equal(answeredBatchClarification.result.details.activeDraft.answer.label, "Draft choice");
-assert.match(answeredBatchClarification.result.content[0].text, /Current draft: 1\. Draft choice/);
+assert.equal(answeredBatchClarification.result.details.answers[0].answer.label, "Draft choice");
+assert.equal(answeredBatchClarification.result.details.continuation.tabs[0].answer.label, "Draft choice");
+assert.match(answeredBatchClarification.result.content[0].text, /Continuation ID:/);

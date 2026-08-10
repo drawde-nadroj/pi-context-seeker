@@ -32,7 +32,7 @@
     ]
   },
   "scripts": {
-    "test": "tsx test/ask-user-question.test.ts && tsx test/final-review-regressions.test.ts",
+    "test": "tsx test/ask-user-question.test.ts && tsx test/final-review-regressions.test.ts && tsx test/resumable-batch-clarification.test.ts",
     "typecheck": "tsc --noEmit",
     "pack:check": "npm pack --dry-run"
   },

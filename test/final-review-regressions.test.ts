@@ -216,7 +216,8 @@ const cases: Array<{ name: string; run: () => Promise<void> }> = [
 					["before real caret", beforeCaret.focused, `tail${CURSOR_MARKER}`],
 					["after real caret", afterCaret.focused, `${CURSOR_MARKER}tail`],
 				] as const) {
-					if (markerCount(frame) !== 1 || !frame.includes(expectedOrder)) failures.push(`${scenario.name}, attacker marker ${position}: expected exactly one trusted marker at the real caret`);
+					const withoutSoftwareCaretStyle = frame.replace(/\x1b\[[0-9;]*m/g, "");
+					if (markerCount(frame) !== 1 || !withoutSoftwareCaretStyle.includes(expectedOrder)) failures.push(`${scenario.name}, attacker marker ${position}: expected exactly one trusted marker at the real caret`);
 				}
 				if (markerCount(beforeCaret.unfocused) !== 0) failures.push(`${scenario.name}, unfocused: attacker marker was re-emitted as trusted`);
 			}

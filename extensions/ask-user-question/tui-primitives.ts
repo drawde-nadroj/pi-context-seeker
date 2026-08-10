@@ -31,6 +31,20 @@ export function sanitizeEditorDisplay(text: string): string {
 	return `${sanitizeDisplayText(before)}${CURSOR_MARKER}${sanitizeDisplayText(after)}`;
 }
 
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/** Retain the trusted hardware/IME marker and paint a terminal-visible caret cell. */
+export function renderSoftwareCaret(text: string): string {
+	const safe = sanitizeEditorDisplay(text);
+	const markerIndex = safe.lastIndexOf(CURSOR_MARKER);
+	if (markerIndex < 0) return safe;
+	const before = safe.slice(0, markerIndex);
+	const after = safe.slice(markerIndex + CURSOR_MARKER.length);
+	const first = after ? graphemeSegmenter.segment(after)[Symbol.iterator]().next().value?.segment ?? "" : "";
+	const cell = first || " ";
+	return `${before}${CURSOR_MARKER}\x1b[7m${cell}\x1b[27m${after.slice(first.length)}`;
+}
+
 export function renderOptionalNote(
 	lines: string[],
 	width: number,
@@ -403,7 +417,8 @@ export class WrappedChoiceList {
 export function constrainFrameHeight(lines: string[], terminalRows: number | undefined, tailLines = 2): void {
 	if (terminalRows === undefined || lines.length <= terminalRows) return;
 	const keepTail = Math.min(Math.max(0, tailLines), terminalRows);
-	const cursorLine = lines.findIndex((line) => line.includes(CURSOR_MARKER));
+	const editorCursorLine = lines.findIndex((line) => line.includes(CURSOR_MARKER));
+	const cursorLine = editorCursorLine >= 0 ? editorCursorLine : lines.findIndex((line) => line.includes("→"));
 	const bodyEnd = lines.length - keepTail;
 
 	if (cursorLine >= 0 && cursorLine < bodyEnd) {

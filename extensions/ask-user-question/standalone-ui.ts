@@ -129,7 +129,7 @@ export function askText(
 				if (clarification.active) {
 					lines.push(...clarification.render(width));
 				} else {
-					add(actionLine(theme, [{ text: "Ctrl+? Ask agent", color: "muted" }]));
+					add(actionLine(theme, [{ text: "Ctrl+? Clarify this question", color: "muted" }]));
 					add(actionLine(theme, [
 						{ text: "Enter submit", color: answerEditor.getExpandedText().trim() ? "success" : "accent" },
 						...(["Shift+Enter newline", "Ctrl+C clear", "Tab note", "Esc cancel"].map((text) => ({ text, color: "muted" as const }))),
@@ -297,7 +297,7 @@ export function askSingleChoice(
 				if (clarification.active) {
 					tail.push(...clarification.render(width));
 				} else {
-					tail.push(truncateToWidth(actionLine(theme, [{ text: "Ctrl+? Ask agent", color: "muted" }]), width));
+					tail.push(truncateToWidth(actionLine(theme, [{ text: "Ctrl+? Clarify this question", color: "muted" }]), width));
 					tail.push(truncateToWidth(hint, width));
 				}
 				tail.push(truncateToWidth(theme.fg("accent", "─".repeat(width)), width));
@@ -517,7 +517,7 @@ export function askMultiChoice(
 				if (clarification.active) {
 					tail.push(...clarification.render(width));
 				} else {
-					tail.push(truncateToWidth(actionLine(theme, [{ text: "Ctrl+? Ask agent", color: "muted" }]), width));
+					tail.push(truncateToWidth(actionLine(theme, [{ text: "Ctrl+? Clarify this question", color: "muted" }]), width));
 					tail.push(truncateToWidth(hint, width));
 				}
 				tail.push(truncateToWidth(theme.fg("accent", "─".repeat(width)), width));

@@ -1,9 +1,9 @@
-import { Key, type KeybindingsManager, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { AskAnswer, OtherAnswer, OptionAnswer, QuestionDef, TabAnswer, TabState } from "./domain.ts";
+import { CURSOR_MARKER, Key, type KeybindingsManager, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { AskAnswer, BatchContinuation, ClarificationTurn, OtherAnswer, OptionAnswer, QuestionDef, TabAnswer, TabState } from "./domain.ts";
 import { getOtherLabel } from "./domain.ts";
-import { addWrapped, addWrappedWithPrefix, constrainFrameHeight, createNoteEditor, createQuestionEditor, isAskAgentKey, isSubmitEnter, normalizeFocusCycleKey, renderOptionalNote, sanitizeDisplayText, sanitizeEditorDisplay, sanitizeProgressLabel, truncateLabel, WrappedChoiceList, type WrappedChoiceItem } from "./tui-primitives.ts";
+import { addWrapped, addWrappedWithPrefix, constrainFrameHeight, createNoteEditor, createQuestionEditor, isAskAgentKey, isSubmitEnter, normalizeFocusCycleKey, renderOptionalNote, renderSoftwareCaret, sanitizeDisplayText, sanitizeEditorDisplay, sanitizeProgressLabel, truncateLabel, WrappedChoiceList, type WrappedChoiceItem } from "./tui-primitives.ts";
 
-export type BatchUIResult = TabAnswer[] | { action: "regenerate"; answers: TabAnswer[] } | { action: "clarification"; clarification: string; answers: TabAnswer[]; activeQuestionIndex: number } | null;
+export type BatchUIResult = TabAnswer[] | { action: "regenerate"; answers: TabAnswer[] } | { action: "clarification"; clarification: string; continuation: BatchContinuation } | null;
 
 export class TabbedQuestions {
 	private questions: QuestionDef[];
@@ -27,12 +27,23 @@ export class TabbedQuestions {
 	private cancelArmed: boolean;
 	private keybindings: KeybindingsManager;
 	private tabChoiceLists: Map<number, WrappedChoiceList>;
+	/** Read-only cursor/window state scoped to one clarification opening. */
+	private previewChoiceLists: Map<number, WrappedChoiceList>;
 	private reviewing: boolean;
 	private partialReview: boolean;
 	private reviewScroll: number;
 	private feedback: string;
 	private clarificationEditor: ReturnType<typeof createQuestionEditor>;
 	private clarificationMode: boolean;
+	private clarificationTurns: ClarificationTurn[];
+	private clarificationPreview: boolean;
+	/** UI-only question pointer. Shared editors always belong to activeTab. */
+	private viewedQuestionIndex: number;
+	/** Immutable for one clarification opening, including all Preview navigation. */
+	private clarificationOriginQuestionId?: string;
+	/** The custom editor draft owner can differ from activeTab while browsing. */
+	private editingOtherQuestionId?: string;
+	private updatedQuestionIds: Set<string>;
 
 	constructor(
 		questions: QuestionDef[],
@@ -40,6 +51,7 @@ export class TabbedQuestions {
 		theme: any,
 		keybindings: KeybindingsManager,
 		done: (result: any) => void,
+		initialState?: BatchContinuation,
 	) {
 		this.questions = questions;
 		this.tui = tui;
@@ -53,11 +65,18 @@ export class TabbedQuestions {
 		this.otherText = "";
 		this.choiceList = null;
 		this.tabChoiceLists = new Map();
+		this.previewChoiceLists = new Map();
 		this.reviewing = false;
 		this.partialReview = false;
 		this.reviewScroll = 0;
 		this.feedback = "";
-		this.clarificationMode = false;
+		this.clarificationTurns = initialState?.clarificationTurns?.map((turn) => ({ ...turn })) ?? [];
+		this.clarificationPreview = false;
+		this.viewedQuestionIndex = Math.max(0, Math.min(initialState?.activeQuestionIndex ?? 0, questions.length - 1));
+		this.clarificationOriginQuestionId = initialState?.clarificationOpen ? initialState.originQuestionId : undefined;
+		this.editingOtherQuestionId = initialState?.editingOtherQuestionId;
+		this.updatedQuestionIds = new Set(initialState?.updatedQuestionIds ?? []);
+		this.clarificationMode = initialState?.clarificationOpen ?? false;
 		this.clarificationEditor = createQuestionEditor(tui, theme);
 
 		this.otherEditor = createQuestionEditor(tui, theme);
@@ -80,6 +99,7 @@ export class TabbedQuestions {
 				this.selected.set("other", answer);
 				tab.selected = new Map(this.selected);
 				this.editMode = false;
+				this.editingOtherQuestionId = undefined;
 				this.otherEditor.focused = false;
 				this.invalidate();
 				tui.requestRender();
@@ -87,6 +107,7 @@ export class TabbedQuestions {
 			}
 			this.selected.set("other", { type: "other" as const, label: trimmed, value: trimmed });
 			this.editMode = false;
+			this.editingOtherQuestionId = undefined;
 			this.otherEditor.focused = false;
 			this.syncMultiSelectState();
 			this.invalidate();
@@ -114,10 +135,20 @@ export class TabbedQuestions {
 				note: "",
 			});
 		}
-		this.tabs = tabs;
+		if (initialState?.tabs?.length === tabs.length) {
+			this.tabs = initialState.tabs.map((tab) => ({ ...tab, selected: new Map(tab.selected.map((answer, index) => [answer.type === "option" ? `option:${answer.index - 1}` : answer.type === "other" ? "other" : `answer:${index}`, answer])) }));
+			this.activeTab = Math.max(0, Math.min(initialState.activeQuestionIndex, tabs.length - 1));
+		} else {
+			this.tabs = tabs;
+		}
 
 		// Prepare active tab
 		this.prepareActiveTab();
+		if (this.editingOtherQuestionId === this.questions[this.activeTab]?.id) {
+			this.editMode = true;
+			this.otherEditor.setText(this.otherText);
+			this.getOrCreateChoiceList(this.questions[this.activeTab]).selectOther();
+		}
 
 		if (this.tabs.length > 0) {
 			this.noteEditor.setText(this.tabs[this.activeTab].note || "");
@@ -154,6 +185,26 @@ export class TabbedQuestions {
 			}
 			return { questionIndex: index, answer, note: tab.note };
 		});
+	}
+
+	private continuationSnapshot(): BatchContinuation {
+		this.clarificationSnapshot();
+		return {
+			questions: this.questions.map((question) => ({ ...question, options: question.options.map((option) => ({ ...option })) })),
+			tabs: this.tabs.map((tab) => ({ ...tab, selected: Array.from(tab.selected.values()) })),
+			activeQuestionIndex: this.activeTab,
+			originQuestionId: this.clarificationOriginQuestionId!,
+			editingOtherQuestionId: this.editingOtherQuestionId,
+			clarificationTurns: this.clarificationTurns.map((turn) => ({ ...turn })),
+			clarificationOpen: true,
+			updatedQuestionIds: [...this.updatedQuestionIds],
+		};
+	}
+
+
+	private markQuestionInteracted(): void {
+		const id = this.questions[this.activeTab]?.id;
+		if (id && this.updatedQuestionIds.delete(id)) this.invalidate();
 	}
 
 	private getActiveTab(): TabState {
@@ -208,6 +259,8 @@ export class TabbedQuestions {
 		} else {
 			this.syncAnswerFromTab();
 		}
+		this.editingOtherQuestionId = undefined;
+		this.editor.focused = false;
 		this.noteFocused = true;
 		this.noteEditor.focused = this._focused;
 		this.invalidate();
@@ -230,7 +283,7 @@ export class TabbedQuestions {
 		if (!tab) return;
 		if (tab.mode === "text") {
 			const val = this.editor?.getExpandedText?.() ?? "";
-			tab.answer = val;
+			tab.answer = val || null;
 			tab.textBuffer = val;
 		} else if (tab.mode === "multi-select") {
 			const vals = Array.from(this.selected.values());
@@ -253,20 +306,41 @@ export class TabbedQuestions {
 	private selectTab(index: number): void {
 		if (index < 0 || index >= this.tabs.length || (!this.reviewing && index === this.activeTab)) return;
 		this.feedback = "";
-		if (!this.reviewing) this.syncAnswerFromTab();
+		if (!this.reviewing) {
+			if (this.editMode) {
+				this.preserveOtherDraft();
+				this.editingOtherQuestionId = this.questions[this.activeTab]?.id;
+			} else this.syncAnswerFromTab();
+		}
 		this.reviewing = false;
 		this.partialReview = false;
 		this.activeTab = index;
-		this.editMode = false;
+		this.viewedQuestionIndex = index;
+		this.editMode = this.editingOtherQuestionId === this.questions[index]?.id;
 		this.noteFocused = false;
 		this.cancelArmed = false;
 		this.otherEditor.focused = false;
 		this.editor.focused = false;
 		this.noteEditor.focused = false;
 		this.prepareActiveTab();
+		if (this.editMode) {
+			this.otherEditor.setText(this.otherText);
+			this.getOrCreateChoiceList(this.questions[index], index).selectOther();
+		}
 		this.noteEditor.setText(this.tabs[index].note || "");
 		this.invalidate();
 		this.tui.requestRender();
+	}
+
+	/** Switch from UI-only Preview to Compose without letting shared controls leak. */
+	private composeViewedQuestion(): void {
+		if (this.viewedQuestionIndex !== this.activeTab) this.selectTab(this.viewedQuestionIndex);
+		// Shared question controls stay visually read-only while clarification owns focus.
+		this.editor.focused = false;
+		this.otherEditor.focused = false;
+		this.noteEditor.focused = false;
+		this.clarificationPreview = false;
+		this.clarificationEditor.focused = this._focused;
 	}
 
 	private prepareActiveTab(): void {
@@ -373,7 +447,7 @@ export class TabbedQuestions {
 		this._focused = val;
 		this.invalidate();
 		if (this.clarificationMode) {
-			this.clarificationEditor.focused = val;
+			this.clarificationEditor.focused = val && !this.clarificationPreview;
 		} else if (this.editMode) {
 			this.otherEditor.focused = val;
 		} else if (this.noteFocused) {
@@ -388,17 +462,41 @@ export class TabbedQuestions {
 
 	handleInput(data: string): void {
 		if (this.clarificationMode) {
-			if (matchesKey(data, Key.escape)) {
+			if (this.clarificationPreview && (matchesKey(data, Key.left) || matchesKey(data, Key.right))) {
+				const direction = matchesKey(data, Key.left) ? -1 : 1;
+				this.viewedQuestionIndex = (this.viewedQuestionIndex + direction + this.questions.length) % this.questions.length;
+			} else if (this.clarificationPreview && (matchesKey(data, Key.up) || matchesKey(data, Key.down) || matchesKey(data, Key.pageUp) || matchesKey(data, Key.pageDown))) {
+				const question = this.questions[this.viewedQuestionIndex];
+				if (question.mode !== "text") {
+					const direction = matchesKey(data, Key.up) || matchesKey(data, Key.pageUp) ? Key.up : Key.down;
+					const count = matchesKey(data, Key.pageUp) || matchesKey(data, Key.pageDown) ? 5 : 1;
+					for (let index = 0; index < count; index++) this.getOrCreatePreviewChoiceList(question, this.viewedQuestionIndex).handleInput(direction);
+				}
+			} else if (matchesKey(data, Key.escape)) {
+				if (this.clarificationPreview) this.composeViewedQuestion();
 				this.clarificationMode = false;
+				this.clarificationPreview = false;
 				this.clarificationEditor.focused = false;
 				if (this.editMode) this.otherEditor.focused = this._focused;
 				else if (this.noteFocused) this.noteEditor.focused = this._focused;
 				else if (this.getActiveTab()?.mode === "text") this.editor.focused = this._focused;
 				this.feedback = "";
+			} else if (matchesKey(data, Key.tab) || matchesKey(data, Key.shift("tab"))) {
+				if (this.clarificationPreview) this.composeViewedQuestion();
+				else {
+					this.clarificationPreview = true;
+					this.clarificationEditor.focused = false;
+				}
+			} else if (this.clarificationPreview) {
+				// Preview is read-only: answer, text, and submit input is ignored.
 			} else if (isSubmitEnter(data)) {
 				const clarification = this.clarificationEditor.getExpandedText().trim();
 				if (!clarification) this.feedback = "Question required.";
-				else return this.done({ action: "clarification", clarification, answers: this.clarificationSnapshot(), activeQuestionIndex: this.activeTab });
+				else {
+					this.clarificationSnapshot();
+					this.clarificationTurns.push({ role: "user", content: clarification });
+					return this.done({ action: "clarification", clarification, continuation: this.continuationSnapshot() });
+				}
 			} else {
 				this.clarificationEditor.handleInput(data);
 				this.feedback = "";
@@ -409,6 +507,10 @@ export class TabbedQuestions {
 			if (this.editMode) this.preserveOtherDraft();
 			else this.syncAnswerFromTab();
 			this.clarificationMode = true;
+			this.clarificationPreview = false;
+			this.previewChoiceLists.clear();
+			this.viewedQuestionIndex = this.activeTab;
+			this.clarificationOriginQuestionId = this.questions[this.activeTab]?.id;
 			this.otherEditor.focused = false;
 			this.noteEditor.focused = false;
 			this.editor.focused = false;
@@ -469,11 +571,13 @@ export class TabbedQuestions {
 			if (matchesKey(data, Key.escape)) {
 				this.preserveOtherDraft();
 				this.editMode = false;
+				this.editingOtherQuestionId = undefined;
 				this.otherEditor.focused = false;
 				this.invalidate();
 				this.tui.requestRender();
 				return;
 			}
+			this.markQuestionInteracted();
 			this.otherEditor.handleInput(data);
 			this.invalidate();
 			this.tui.requestRender();
@@ -490,6 +594,7 @@ export class TabbedQuestions {
 				this.leaveNoteFocus();
 				return;
 			}
+			this.markQuestionInteracted();
 			this.noteEditor.handleInput(data);
 			const tab = this.getActiveTab();
 			if (tab) tab.note = this.noteEditor.getText();
@@ -530,7 +635,7 @@ export class TabbedQuestions {
 		}
 
 		if (matchesKey(data, Key.escape)) {
-			const hasWork = this.tabs.some((candidate) => this.isAnswered(candidate) || candidate.note.trim() || candidate.otherText.trim());
+			const hasWork = this.tabs.some((candidate) => this.isAnswered(candidate) || candidate.note.trim() || candidate.otherText.trim() || candidate.textBuffer.trim() || candidate.selected.size > 0);
 			if (!hasWork || this.cancelArmed) return this.done(null);
 			this.cancelArmed = true;
 			this.invalidate();
@@ -547,6 +652,7 @@ export class TabbedQuestions {
 
 		// Delegate to tab type
 		if (tab.mode === "text") {
+			this.markQuestionInteracted();
 			this.editor.handleInput(data);
 			tab.textBuffer = this.editor.getExpandedText() || "";
 			tab.answer = tab.textBuffer;
@@ -598,6 +704,7 @@ export class TabbedQuestions {
 	}
 
 	private selectOption(tab: TabState, item: WrappedChoiceItem): void {
+		this.markQuestionInteracted();
 		const answer: AskAnswer = {
 			type: "option",
 			label: item.option!.label,
@@ -613,6 +720,7 @@ export class TabbedQuestions {
 	}
 
 	private openOtherEditor(): void {
+		this.markQuestionInteracted();
 		if (this.choiceList) this.choiceList.selectOther();
 		const tab = this.getActiveTab();
 		if (tab.mode === "single-select") {
@@ -622,6 +730,7 @@ export class TabbedQuestions {
 		}
 		this.cancelArmed = false;
 		this.editMode = true;
+		this.editingOtherQuestionId = this.questions[this.activeTab]?.id;
 		this.otherEditor.setText(this.otherText);
 		this.otherEditor.focused = true;
 		this.invalidate();
@@ -669,6 +778,7 @@ export class TabbedQuestions {
 	}
 
 	private toggleOption(item: WrappedChoiceItem): void {
+		this.markQuestionInteracted();
 		const option = item.option;
 		if (!option) return;
 		if (this.selected.has(item.id)) this.selected.delete(item.id);
@@ -678,6 +788,7 @@ export class TabbedQuestions {
 	}
 
 	private toggleOther(): void {
+		this.markQuestionInteracted();
 		if (this.selected.has("other")) {
 			this.selected.delete("other");
 			this.syncMultiSelectState();
@@ -692,7 +803,7 @@ export class TabbedQuestions {
 		this.openOtherEditor();
 	}
 
-	private renderActionBar(width: number): string[] {
+	private renderActionBar(width: number, presentationIndex = this.activeTab): string[] {
 		type ActionColor = "muted" | "accent" | "success" | "warning";
 		type Action = { text: string; color: ActionColor };
 		const action = (text: string, color: ActionColor = "muted"): Action => ({ text, color });
@@ -709,6 +820,10 @@ export class TabbedQuestions {
 			["Ctrl+C Clear", ["^C Clear"]],
 			["Tab Add note", ["Tab Note"]],
 			["←→ Questions", ["←→ Qs"]],
+			["PgUp/PgDn Context", ["Pg Context"]],
+			["↑↓/PgUp/PgDn Scroll", ["↑↓/Pg Scroll", "Pg Scroll"]],
+			["←/→ Questions", ["←→ Questions", "←→ Qs"]],
+			["Tab Compose", ["Tab Compose"]],
 		]);
 		const fitAction = (item: Action): Action => {
 			for (const candidate of [item.text, ...(compactVariants.get(item.text) ?? [])]) {
@@ -733,25 +848,24 @@ export class TabbedQuestions {
 			flush();
 		};
 
-		if (this.clarificationMode) {
-			row([action("Ask agent", "accent"), action("Enter Ask", "accent"), action("Esc Back")]);
-			return lines;
-		}
 		if (this.reviewing) {
 			row([action("✓ Ready", "success"), action("Enter Submit", "success"), action("↑↓ Scroll"), action("Esc Back")]);
 			return lines;
 		}
-		const clarificationAction = action("Ctrl+? Ask agent");
+		const clarificationAction = action(this.clarificationTurns.length > 0
+			? "Ctrl+? Follow up"
+			: "Ctrl+? Clarify");
 		const partialActions = this.canRegenerate()
 			? [action("Ctrl+Enter Review answered", "success"), action("Ctrl+R Regenerate unanswered")]
 			: [];
-		if (this.editMode) {
+		const presentationEditing = this.editingOtherQuestionId === this.questions[presentationIndex]?.id;
+		if (presentationEditing) {
 			row([action("Editing", "accent"), action("Enter Save", "accent"), action("Ctrl+C Clear"), ...partialActions, clarificationAction, action("Esc Back")]);
 			const minimumLines = width < 24 ? 5 : 2;
 			while (lines.length < minimumLines) lines.push("");
 			return lines;
 		}
-		if (this.noteFocused) {
+		if (this.noteFocused && presentationIndex === this.activeTab) {
 			row([action("Note", "accent"), action("Tab Back", "accent"), ...partialActions, clarificationAction, action("Esc Back")]);
 			const minimumLines = width < 24 ? 5 : 2;
 			while (lines.length < minimumLines) lines.push("");
@@ -762,13 +876,13 @@ export class TabbedQuestions {
 			return lines;
 		}
 
-		const tab = this.getActiveTab();
+		const tab = this.tabs[presentationIndex];
 		const item = tab.mode === "text"
 			? undefined
-			: this.getOrCreateChoiceList(this.questions[this.activeTab]).selectedItem;
+			: this.getPresentationChoiceList(this.questions[presentationIndex], presentationIndex).selectedItem;
 		const itemSelected = item ? tab.selected.has(item.id) : false;
 		const ready = this.isAnswered(tab);
-		const advanceLabel = this.activeTab === this.tabs.length - 1 ? "Review" : "Next";
+		const advanceLabel = presentationIndex === this.tabs.length - 1 ? "Review" : "Next";
 		let primary: Action[];
 		if (tab.mode === "text") primary = [action(`Enter ${advanceLabel}`, ready ? "success" : "accent")];
 		else if (tab.mode === "single-select") {
@@ -791,16 +905,53 @@ export class TabbedQuestions {
 		return lines;
 	}
 
-	render(width: number): string[] {
-		if (this.cachedLines && this.cachedWidth === width && this.cachedRows === this.tui.terminal?.rows) {
-			return this.cachedLines;
+	private renderClarificationBar(width: number): string[] {
+		if (this.clarificationPreview) {
+			return [truncateToWidth(this.theme.bg("selectedBg", this.theme.fg("accent", " Preview · ←/→ Qs · ↑/↓ · Tab Compose · Esc")), width)];
 		}
+		if (this.feedback) return [truncateToWidth(this.theme.bg("selectedBg", this.theme.fg("warning", ` ${this.feedback} · Esc`)), width)];
+		const preferredLabel = width < 24 ? " ? " : " Clarify: ";
+		const preferredHint = width >= 48 ? " · Tab Preview · Enter Ask · Esc" : width >= 30 ? " · Tab · Enter · Esc" : "";
+		// The editor caret is the irreducible cell. Decorations may use only the
+		// remaining columns so truncation can never hide hardware/software carets.
+		const decorationBudget = Math.max(0, width - 1);
+		const label = truncateLabel(preferredLabel, Math.min(visibleWidth(preferredLabel), decorationBudget));
+		const hintBudget = Math.max(0, decorationBudget - visibleWidth(label));
+		const hint = truncateLabel(preferredHint, Math.min(visibleWidth(preferredHint), hintBudget));
+		const editorWidth = Math.max(1, width - visibleWidth(label) - visibleWidth(hint));
+		const innerLines = this.clarificationEditor.render(editorWidth).slice(1, -1);
+		const cursorLine = innerLines.find((line) => line.includes(CURSOR_MARKER));
+		const editorLine = cursorLine ?? innerLines.at(-1) ?? "";
+		const renderedEditor = cursorLine ? renderSoftwareCaret(editorLine) : sanitizeEditorDisplay(editorLine);
+		return [truncateToWidth(this.theme.bg("selectedBg", `${this.theme.fg("accent", label)}${renderedEditor}${this.theme.fg("muted", hint)}`), width)];
+	}
 
+	render(width: number): string[] {
+		if (this.cachedLines && this.cachedWidth === width && this.cachedRows === this.tui.terminal?.rows) return this.cachedLines;
+		const terminalRows = this.tui.terminal?.rows ?? 40;
+		const presentationIndex = this.clarificationMode ? this.viewedQuestionIndex : this.activeTab;
+		const clarificationBar = this.clarificationMode ? this.renderClarificationBar(width) : [];
+		const normalRows = Math.max(1, terminalRows - clarificationBar.length);
+		const lines = this.renderQuestionFrame(width, presentationIndex, normalRows, terminalRows, this.clarificationMode);
+		lines.push(...clarificationBar);
+		constrainFrameHeight(lines, terminalRows, clarificationBar.length);
+		this.cachedWidth = width;
+		this.cachedRows = this.tui.terminal?.rows;
+		this.cachedLines = lines;
+		return lines;
+	}
+
+	/** Shared ordinary/Compose/Preview progress and question-detail renderer. */
+	private renderQuestionFrame(width: number, presentationIndex: number, frameRows: number, visualRows: number, readOnly: boolean): string[] {
 		const lines: string[] = [];
 		const th = this.theme;
-		const compactHeight = (this.tui.terminal?.rows ?? 40) < 20;
+		const compactHeight = visualRows < 20;
 		const add = (text: string) => lines.push(truncateToWidth(text, width));
-
+		const wrapped = (text: string): string[] => {
+			const result: string[] = [];
+			addWrapped(result, text, width);
+			return result;
+		};
 		add(th.fg("borderMuted", "─".repeat(width)));
 
 		// Show every semantic label when it fits. Under pressure, inactive
@@ -808,14 +959,14 @@ export class TabbedQuestions {
 		// remain useful instead of all labels receiving the same tiny budget.
 		const reviewStep = this.tabs.length;
 		const stepCount = reviewStep + 1;
-		const activeStep = this.reviewing ? reviewStep : this.activeTab;
+		const activeStep = this.reviewing ? reviewStep : presentationIndex;
 		const answered = (index: number) => index === reviewStep
 			? this.reviewing || this.tabs.every((candidate) => this.isAnswered(candidate))
 			: this.isAnswered(this.tabs[index]);
 		const hasNote = (index: number) => index < reviewStep && this.tabs[index].note.trim().length > 0;
 		const stepLabel = (index: number) => index === reviewStep
 			? "Review"
-			: sanitizeProgressLabel(this.questions[index].label || `Q${index + 1}`);
+			: `${sanitizeProgressLabel(this.questions[index].label || `Q${index + 1}`)}${this.updatedQuestionIds.has(this.questions[index].id!) ? " Updated" : ""}`;
 		const plainFullToken = (index: number) => ` ${answered(index) ? "✓" : "○"} ${stepLabel(index)}${hasNote(index) ? " •" : ""} `;
 		const fullWidth = Array.from({ length: stepCount }, (_, index) => visibleWidth(plainFullToken(index)))
 			.reduce((total, tokenWidth) => total + tokenWidth, stepCount - 1);
@@ -948,7 +1099,7 @@ export class TabbedQuestions {
 				summaryLines.push("");
 			});
 			const actionLines = this.renderActionBar(width);
-			const budget = Math.max(0, (this.tui.terminal?.rows ?? 40) - lines.length - actionLines.length - 2);
+			const budget = Math.max(0, frameRows - lines.length - actionLines.length - 2);
 			const maxScroll = Math.max(0, summaryLines.length - budget);
 			this.reviewScroll = Math.min(this.reviewScroll, maxScroll);
 			const visible = summaryLines.slice(this.reviewScroll, this.reviewScroll + budget);
@@ -958,46 +1109,39 @@ export class TabbedQuestions {
 			add(th.fg("borderMuted", "─".repeat(width)));
 			lines.push(...actionLines);
 			add(th.fg("accent", "─".repeat(width)));
-			constrainFrameHeight(lines, this.tui.terminal?.rows, actionLines.length + 2);
-			this.cachedWidth = width;
-			this.cachedRows = this.tui.terminal?.rows;
-			this.cachedLines = lines;
+			constrainFrameHeight(lines, frameRows, actionLines.length + 2);
 			return lines;
 		}
 
-		const tab = this.getActiveTab();
-		const q = this.questions[this.activeTab];
+		const tab = this.tabs[presentationIndex];
+		const q = this.questions[presentationIndex];
 
-		if (this.clarificationMode) {
-			addWrapped(lines, th.fg("text", th.bold("What do you want to ask the agent?")), width);
-			lines.push("");
-			for (const line of this.clarificationEditor.render(Math.max(1, width - 2))) add(` ${sanitizeEditorDisplay(line)}`);
-			if (this.feedback) add(th.fg("warning", ` ${this.feedback}`));
-			const actionLines = this.renderActionBar(width);
-			add(th.fg("borderMuted", "─".repeat(width)));
-			lines.push(...actionLines);
-			add(th.fg("accent", "─".repeat(width)));
-			constrainFrameHeight(lines, this.tui.terminal?.rows, actionLines.length + 2);
-			this.cachedWidth = width; this.cachedRows = this.tui.terminal?.rows; this.cachedLines = lines;
-			return lines;
-		}
+		const actionLines = this.renderActionBar(width, presentationIndex);
+		const questionHeading = wrapped(th.fg("accent", th.bold(`Q${presentationIndex + 1}: ${sanitizeDisplayText(q.question)}${this.updatedQuestionIds.has(q.id!) ? "  Updated" : ""}`)));
 
 		// Only the original interactive question heading is accent-colored.
-		addWrapped(lines, th.fg("accent", th.bold(`Q${this.activeTab + 1}: ${sanitizeDisplayText(q.question)}`)), width);
+		lines.push(...questionHeading);
 		if (q.details) addWrapped(lines, th.fg("muted", ` ${sanitizeDisplayText(q.details)}`), width);
 		if (!compactHeight) lines.push("");
 
+		const noteEditor = presentationIndex === this.activeTab
+			? this.noteEditor
+			: this.readOnlyNoteEditor(tab.note);
+		// Clarification owns actual focus, but the active question keeps the same
+		// note-editing presentation until ordinary ownership is restored.
+		const noteIsFocused = presentationIndex === this.activeTab && this.noteFocused;
 		const notePreview: string[] = [];
-		renderOptionalNote(notePreview, width, th, this.noteEditor, this.noteFocused, tab.mode === "multi-select" ? 9 : tab.mode === "single-select" ? 6 : 2);
-		const actionLines = this.renderActionBar(width);
+		renderOptionalNote(notePreview, width, th, noteEditor, noteIsFocused, tab.mode === "multi-select" ? 9 : tab.mode === "single-select" ? 6 : 2);
 		const reservedTailLines = notePreview.length + (compactHeight ? 0 : 2) + actionLines.length + 2;
-		const availableBodyLines = Math.max(0, (this.tui.terminal?.rows ?? Number.POSITIVE_INFINITY) - lines.length - reservedTailLines);
+		// Always render the current widget row. The final body viewport may evict
+		// heading/detail rows, but it must keep the selected option reachable.
+		const availableBodyLines = Math.max(1, frameRows - lines.length - reservedTailLines);
 		if (tab.mode === "text") {
-			this.renderTextTab(width, lines, add, th);
+			this.renderTextTab(width, lines, add, th, presentationIndex === this.activeTab ? this.editor : this.readOnlyQuestionEditor(tab.textBuffer));
 		} else if (tab.mode === "single-select") {
-			this.renderSingleSelectTab(width, lines, add, th, tab, q, availableBodyLines);
+			this.renderSingleSelectTab(width, lines, add, th, tab, q, availableBodyLines, presentationIndex, readOnly);
 		} else if (tab.mode === "multi-select") {
-			this.renderMultiSelectTab(width, lines, add, th, q, availableBodyLines);
+			this.renderMultiSelectTab(width, lines, add, th, q, tab, availableBodyLines, presentationIndex, readOnly);
 		}
 
 		if (this.feedback) add(th.fg("warning", ` ${this.feedback}`));
@@ -1005,54 +1149,88 @@ export class TabbedQuestions {
 
 		// A native one-line note action, not a second bordered editor panel.
 		const noteIndent = tab.mode === "multi-select" ? 9 : tab.mode === "single-select" ? 6 : 2;
-		renderOptionalNote(lines, width, th, this.noteEditor, this.noteFocused, noteIndent);
+		renderOptionalNote(lines, width, th, noteEditor, noteIsFocused, noteIndent);
 
 		if (!compactHeight) lines.push("");
 
 		add(th.fg("borderMuted", "─".repeat(width)));
 		lines.push(...actionLines);
 		add(th.fg("accent", "─".repeat(width)));
-		constrainFrameHeight(lines, this.tui.terminal?.rows, actionLines.length + 2);
-
-		this.cachedWidth = width;
-		this.cachedRows = this.tui.terminal?.rows;
-		this.cachedLines = lines;
+		constrainFrameHeight(lines, frameRows, actionLines.length + 2);
 		return lines;
 	}
 
-	private renderTextTab(width: number, lines: string[], add: (text: string) => void, th: any): void {
+	private readOnlyQuestionEditor(text: string): ReturnType<typeof createQuestionEditor> {
+		const editor = createQuestionEditor(this.tui, this.theme);
+		editor.setText(text || "");
+		editor.focused = false;
+		return editor;
+	}
+
+	private readOnlyNoteEditor(text: string): ReturnType<typeof createNoteEditor> {
+		const editor = createNoteEditor(this.tui, this.theme);
+		editor.setText(text || "");
+		editor.focused = false;
+		return editor;
+	}
+
+	private renderTextTab(width: number, lines: string[], add: (text: string) => void, th: any, editor: ReturnType<typeof createQuestionEditor>): void {
 		add(th.fg("accent", "─".repeat(width)));
 		const editorPadding = width > 2 ? 1 : 0;
 		const editorIndent = " ".repeat(editorPadding);
-		for (const line of this.editor.render(Math.max(1, width - editorPadding * 2))) {
+		for (const line of editor.render(Math.max(1, width - editorPadding * 2))) {
 			add(`${editorIndent}${th.fg("accent", sanitizeEditorDisplay(line))}`);
 		}
 	}
 
-	private getOrCreateChoiceList(question: QuestionDef): WrappedChoiceList {
-		const existing = this.tabChoiceLists.get(this.activeTab);
-		if (existing) {
-			this.choiceList = existing;
-			return existing;
-		}
-
-		const choiceList = new WrappedChoiceList(
+	private createChoiceList(question: QuestionDef): WrappedChoiceList {
+		return new WrappedChoiceList(
 			question.options,
 			getOtherLabel(question.options),
 			Math.min(question.options.length + 1, 8, Math.max(1, Math.floor((this.tui.terminal?.rows ?? 24) / 4))),
 			this.keybindings,
 			this.theme,
 		);
+	}
+
+	private getOrCreatePreviewChoiceList(question: QuestionDef, questionIndex: number): WrappedChoiceList {
+		const existing = this.previewChoiceLists.get(questionIndex);
+		if (existing) return existing;
+		const preview = this.createChoiceList(question);
+		const ordinary = this.tabChoiceLists.get(questionIndex);
+		if (ordinary?.selectedItem) preview.setSelectedIndex(ordinary.selectedItem.index - 1);
+		this.previewChoiceLists.set(questionIndex, preview);
+		return preview;
+	}
+
+	private getPresentationChoiceList(question: QuestionDef, questionIndex: number): WrappedChoiceList {
+		return this.clarificationPreview
+			? this.getOrCreatePreviewChoiceList(question, questionIndex)
+			: this.getOrCreateChoiceList(question, questionIndex);
+	}
+
+	private getOrCreateChoiceList(question: QuestionDef, questionIndex = this.activeTab): WrappedChoiceList {
+		const existing = this.tabChoiceLists.get(questionIndex);
+		if (existing) {
+			this.choiceList = existing;
+			return existing;
+		}
+
+		const choiceList = this.createChoiceList(question);
 		this.choiceList = choiceList;
-		this.tabChoiceLists.set(this.activeTab, choiceList);
+		this.tabChoiceLists.set(questionIndex, choiceList);
 		return choiceList;
 	}
 
-	private renderSingleSelectTab(width: number, lines: string[], add: (text: string) => void, _th: any, tab: TabState, q: QuestionDef, availableLines: number): void {
-		const choiceList = this.getOrCreateChoiceList(q);
+	private renderSingleSelectTab(width: number, lines: string[], add: (text: string) => void, _th: any, tab: TabState, q: QuestionDef, availableLines: number, questionIndex: number, readOnly: boolean): void {
+		const choiceList = this.getPresentationChoiceList(q, questionIndex);
+		const editing = this.editingOtherQuestionId === q.id;
+		const otherEditor = editing
+			? questionIndex === this.activeTab ? this.otherEditor : this.readOnlyQuestionEditor(tab.otherText)
+			: undefined;
 		for (const line of choiceList.render(Math.max(1, width - 1), {
 			selectedAnswers: tab.selected,
-			inlineOtherEditor: this.editMode ? this.otherEditor : undefined,
+			inlineOtherEditor: editing ? otherEditor : undefined,
 			showRadio: true,
 			availableLines,
 		})) {
@@ -1060,19 +1238,24 @@ export class TabbedQuestions {
 		}
 	}
 
-	private renderMultiSelectTab(width: number, lines: string[], add: (text: string) => void, th: any, q: QuestionDef, availableLines: number): void {
-		const choiceList = this.getOrCreateChoiceList(q);
-		const choiceBudget = Math.max(0, availableLines - 2);
+	private renderMultiSelectTab(width: number, lines: string[], add: (text: string) => void, th: any, q: QuestionDef, tab: TabState, availableLines: number, questionIndex: number, readOnly: boolean): void {
+		const choiceList = this.getPresentationChoiceList(q, questionIndex);
+		const choiceBudget = Math.max(1, availableLines - 2);
+		const selected = tab.selected;
+		const editing = this.editingOtherQuestionId === q.id;
+		const otherEditor = editing
+			? questionIndex === this.activeTab ? this.otherEditor : this.readOnlyQuestionEditor(tab.otherText)
+			: undefined;
 
-		if (this.selected.size > 0) {
-			add(th.fg("success", ` ✓ ${this.selected.size} selected`));
+		if (selected.size > 0) {
+			add(th.fg("success", ` ✓ ${selected.size} selected`));
 		} else {
 			add(th.fg("dim", " ○ Select options below"));
 		}
 		lines.push("");
 		lines.push(...choiceList.render(width, {
-			selectedAnswers: this.selected,
-			inlineOtherEditor: this.editMode ? this.otherEditor : undefined,
+			selectedAnswers: selected,
+			inlineOtherEditor: editing ? otherEditor : undefined,
 			availableLines: choiceBudget,
 		}));
 	}
