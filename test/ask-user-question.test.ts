@@ -854,6 +854,24 @@ for (const scenario of [
 	assert.ok(frames.at(-1)!.some((line) => line.includes(CURSOR_MARKER)), `${scenario.name}: editor remains active after clear`);
 }
 
+// Ctrl+C clears the focused optional note without leaving note focus.
+for (const scenario of [
+	{ name: "standalone text note", tool: askOne, params: { question: "Standalone text note" } },
+	{ name: "standalone single note", tool: askOne, params: { question: "Standalone single note", options: [{ label: "Preset" }] } },
+	{ name: "standalone multi note", tool: askOne, params: { question: "Standalone multi note", options: [{ label: "Preset" }], multiSelect: true } },
+	{ name: "batch note", tool: askMany, params: { questions: [{ question: "Batch note", options: [{ label: "Preset" }] }] } },
+]) {
+	const frames = await captureToolRender(scenario.tool, scenario.params, {
+		inputs: [TAB, "UNIQUE_NOTE_TO_CLEAR", CTRL_C],
+		widths: [80],
+		focused: true,
+	});
+	const cleared = plainText(frames.at(-1)!);
+	assert.doesNotMatch(cleared, /UNIQUE_NOTE_TO_CLEAR/, `${scenario.name}: Ctrl+C clears the note`);
+	assert.match(cleared, /Ctrl\+C (?:clear|Clear)/, `${scenario.name}: note controls advertise clear`);
+	assert.ok(frames.at(-1)!.some((line) => line.includes(CURSOR_MARKER)), `${scenario.name}: note remains focused after clear`);
+}
+
 // Open text answers expose and support both advancing and direct question navigation.
 const textNavigation = await captureToolRender(
 	askMany,

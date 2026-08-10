@@ -585,6 +585,15 @@ export class TabbedQuestions {
 
 		// Note editor is focused
 		if (this.noteFocused) {
+			if (matchesKey(data, Key.ctrl("c"))) {
+				this.markQuestionInteracted();
+				this.noteEditor.setText("");
+				const tab = this.getActiveTab();
+				if (tab) tab.note = "";
+				this.invalidate();
+				this.tui.requestRender();
+				return;
+			}
 			if (matchesKey(data, Key.tab)) {
 				this.leaveNoteFocus();
 				return;
@@ -865,7 +874,7 @@ export class TabbedQuestions {
 			return lines;
 		}
 		if (this.noteFocused && presentationIndex === this.activeTab) {
-			row([action("Note", "accent"), action("Tab Back", "accent"), ...partialActions, clarificationAction, action("Esc Back")]);
+			row([action("Note", "accent"), action("Ctrl+C Clear"), action("Tab Back", "accent"), ...partialActions, clarificationAction, action("Esc Back")]);
 			const minimumLines = width < 24 ? 5 : 2;
 			while (lines.length < minimumLines) lines.push("");
 			return lines;

@@ -223,7 +223,7 @@ Controls vary with the active field; the UI shows the available actions.
 - **Tab / Shift+Tab**: move to or from the optional note; in batch mode, cycle question tabs where indicated
 - **Shift+Enter** (Ctrl+J in supported terminals): insert a newline in an editor
 - **Ctrl+Enter / Alt+Enter** (single question): submit a free-form question while editing its note
-- **Ctrl+C**: clear the active text editor where shown
+- **Ctrl+C**: clear the active answer, custom-answer, or note editor where shown
 - **Escape**: go back, clear/cancel, or require a second press when answers would be discarded
 - **Ctrl+Enter** (batch): review answered questions and mark the rest skipped
 - **Ctrl+R**: regenerate unanswered batch questions when some questions are already resolved

@@ -157,10 +157,15 @@ export function askText(
 					lines.push(...clarification.render(width));
 				} else {
 					add(actionLine(theme, [{ text: "Ctrl+/ Ask agent", color: "muted" }]));
-					add(actionLine(theme, [
-						{ text: "Enter submit", color: answerEditor.getExpandedText().trim() ? "success" : "accent" },
-						...(["Shift+Enter newline", "Ctrl+C clear", "Tab note", "Esc cancel"].map((text) => ({ text, color: "muted" as const }))),
-					]));
+					add(actionLine(theme, noteFocused
+						? [
+							{ text: "Note", color: "accent" }, { text: "Ctrl+C clear", color: "muted" },
+							{ text: "Tab answer", color: "accent" }, { text: "Esc back", color: "muted" },
+						]
+						: [
+							{ text: "Enter submit", color: answerEditor.getExpandedText().trim() ? "success" : "accent" },
+							...(["Shift+Enter newline", "Ctrl+C clear", "Tab note", "Esc cancel"].map((text) => ({ text, color: "muted" as const }))),
+						]));
 				}
 				add(theme.fg("accent", "─".repeat(width)));
 				constrainFrameHeight(lines, tui.terminal?.rows, 3);
@@ -177,7 +182,8 @@ export function askText(
 				if (noteFocused) {
 					if (matchesKey(data, Key.ctrl("enter")) || matchesKey(data, Key.alt("enter"))) return finish();
 					if (matchesKey(data, Key.escape) || matchesKey(data, Key.tab)) return focusPrimary();
-					noteEditor.handleInput(data);
+					if (matchesKey(data, Key.ctrl("c"))) noteEditor.setText("");
+					else noteEditor.handleInput(data);
 				} else {
 					if (matchesKey(data, Key.tab)) return focusNote();
 					if (matchesKey(data, Key.ctrl("c"))) answerEditor.setText("");
@@ -313,7 +319,8 @@ export function askSingleChoice(
 				}
 				const hint = noteFocused
 					? actionLine(theme, [
-						{ text: "Note", color: "accent" }, { text: "Tab answer", color: "accent" }, { text: "Esc back", color: "muted" },
+						{ text: "Note", color: "accent" }, { text: "Ctrl+C clear", color: "muted" },
+						{ text: "Tab answer", color: "accent" }, { text: "Esc back", color: "muted" },
 					])
 					: editMode
 						? actionLine(theme, [
@@ -359,7 +366,8 @@ export function askSingleChoice(
 						return finish(answerForItem(item));
 					}
 					if (matchesKey(data, Key.escape) || matchesKey(data, Key.tab)) return focusPrimary();
-					noteEditor.handleInput(data);
+					if (matchesKey(data, Key.ctrl("c"))) noteEditor.setText("");
+					else noteEditor.handleInput(data);
 				} else if (editMode) {
 					if (matchesKey(data, Key.ctrl("c"))) {
 						editor.setText("");
@@ -541,7 +549,10 @@ export function askMultiChoice(
 					? [{ text: otherSpaceAction, color: selected.has("other") ? "muted" : "accent" }, { text: "Enter edit", color: "accent" }, { text: "Tab note", color: "muted" }, { text: "Esc cancel", color: "muted" }]
 					: [{ text: "Space toggle", color: selected.size > 0 ? "muted" : "accent" }, { text: `Enter ${selected.size > 0 ? "done" : "select"}`, color: selected.size > 0 ? "success" : "accent" }, { text: "Tab note", color: "muted" }, { text: "Esc cancel", color: "muted" }];
 				const hint = noteFocused
-					? actionLine(theme, [{ text: "Note", color: "accent" }, { text: "Tab options", color: "accent" }, { text: "Esc back", color: "muted" }])
+					? actionLine(theme, [
+						{ text: "Note", color: "accent" }, { text: "Ctrl+C clear", color: "muted" },
+						{ text: "Tab options", color: "accent" }, { text: "Esc back", color: "muted" },
+					])
 					: editMode
 						? actionLine(theme, [{ text: "Typing", color: "accent" }, { text: "Enter save", color: "accent" }, { text: "Ctrl+C clear", color: "muted" }, { text: "Tab note", color: "muted" }, { text: "Esc back", color: "muted" }])
 						: actionLine(theme, primaryHint);
@@ -584,7 +595,8 @@ export function askMultiChoice(
 						return finish();
 					}
 					if (matchesKey(data, Key.escape) || matchesKey(data, Key.tab)) return focusPrimary();
-					noteEditor.handleInput(data);
+					if (matchesKey(data, Key.ctrl("c"))) noteEditor.setText("");
+					else noteEditor.handleInput(data);
 				} else if (editMode) {
 					if (matchesKey(data, Key.ctrl("c"))) {
 						otherEditor.setText("");
