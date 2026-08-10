@@ -111,6 +111,19 @@ The main difference is not merely how many questions fit in one dialog. This pac
 - Structured results for answered, cancelled, unavailable, revision, and clarification states
 
 ## Installation
+
+### From npm (recommended)
+
+```bash
+pi install npm:pi-context-seeker
+```
+
+To update an existing npm installation:
+
+```bash
+pi update npm:pi-context-seeker
+```
+
 ### From Git
 
 ```bash
@@ -119,6 +132,8 @@ pi install git:https://github.com/the-sleeping-teemo/pi-context-seeker
 
 ### From a local checkout
 
+Use this option when developing or testing local changes:
+
 ```bash
 git clone https://github.com/the-sleeping-teemo/pi-context-seeker.git
 cd pi-context-seeker
@@ -126,7 +141,7 @@ npm install
 pi install .
 ```
 
-Restart Pi if it is already running. The package manifest explicitly loads only `extensions/ask-user-question.ts`; the test module is not an extension entry point.
+Restart Pi if it is already running. The package manifest explicitly loads only `extensions/ask-user-question.ts`; test modules are not extension entry points.
 
 ## Tool parameters
 
