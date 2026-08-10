@@ -1,6 +1,24 @@
 # pi-context-seeker
 
-Explain what you know so you can find what lies between the seams.
+share context, seek the seams, and make a decision.
+call out the unknown!
+
+**TLDR:** (yes the juice is worth the squeeze)
+
+- ask for more questions and you shall receive!
+- regenerate remaining questions based on answers and notes (if q1 changes direction, that context carries forward)
+- ask for clarity between questions (never answer a question you don't understand!)
+- stop anytime and submit only what you've answered (you're free!)
+- recommended options first if you're more of a glancer 
+- shared understanding, less assumptions, it's always cheaper to ask!
+
+- already interested? check out [nstallation](#installation)! hope you enjoy :)
+
+**Usage:**
+- best for work where understanding grows as decisions compound
+- the most fruitful conversations happen at the edge of shared understanding
+
+## everything underneath is vibed but the above is Lived
 
 Adaptive questions for building shared context with the [Pi Coding Agent](https://github.com/earendil-works/pi)—giving you precise control over what an agent learns, making efficient use of its context window, and reducing tokens wasted on guesses and rework.
 
@@ -91,8 +109,7 @@ The main difference is not merely how many questions fit in one dialog. This pac
 - Width-aware terminal rendering and serialized dialogs
 - Structured results for answered, cancelled, unavailable, revision, and clarification states
 
-## Install and use
-
+## Installation
 ### From Git
 
 ```bash
