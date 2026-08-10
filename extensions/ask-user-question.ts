@@ -166,8 +166,8 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 			"Provide options for choice and decision questions; omit options for open-ended prompts that ask the user to describe, explain, or share an experience. Use multiSelect only with options.",
 			"Add a short label for semantic progress when useful; notes are optional.",
 			"The user reviews completed answers before an explicit Submit and may intentionally skip unanswered questions. Use recommended: true for a recommendation; custom answers remain distinct.",
-			"If the result status is regenerate, use the answered entries and notes as new understanding, do not repeat resolved questions, and immediately call ask_questions again with revised unanswered questions only.",
-			"If ask_questions returns clarification_requested, answer the clarification, keep resolved answers as context, and immediately call ask_questions again with revised unanswered questions only.",
+			"If the result status is regenerate, use the answered entries and notes as new understanding, do not repeat resolved questions, and immediately call ask_questions again with regenerated unanswered questions only.",
+			"If ask_questions returns clarification_requested, answer the clarification, keep resolved answers as context, and immediately call ask_questions again with regenerated unanswered questions only.",
 		],
 		parameters: AskQuestionsParams,
 
@@ -236,7 +236,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 				return new Text(theme.fg("warning", "! Questions unavailable"), 0, 0);
 			}
 			if (details.status === "regenerate") {
-				return new Text(theme.fg("accent", `↻ Revise ${details.unansweredQuestions?.length ?? 0} unanswered`), 0, 0);
+				return new Text(theme.fg("accent", `↻ Regenerate ${details.unansweredQuestions?.length ?? 0} unanswered`), 0, 0);
 			}
 			if (details.status === "clarification_requested") {
 				return new Text(theme.fg("accent", "↪ Clarification requested"), 0, 0);

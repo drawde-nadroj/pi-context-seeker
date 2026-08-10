@@ -704,11 +704,11 @@ const readinessFrames = await captureToolRender(
 	{ inputs: ["\r", "\r", TAB, "context", TAB, "\r", "\r"], widths: [80] },
 );
 assert.match(plainText(readinessFrames[0]!), /Enter Select/);
-assert.doesNotMatch(plainText(readinessFrames[0]!), /\d+ (?:unanswered|left)|Revise unanswered/);
+assert.doesNotMatch(plainText(readinessFrames[0]!), /\d+ (?:unanswered|left)|Regenerate unanswered/);
 assert.match(plainText(readinessFrames[0]!), /Tab Add note[\s\S]*←→ Questions/);
 assert.doesNotMatch(plainText(readinessFrames[0]!), /Ctrl\+Enter|jump to review/i);
-assert.match(plainText(readinessFrames[1]!), /\(●\) 1\. One[\s\S]*Enter Next[\s\S]*Ctrl\+Enter Review answered[\s\S]*Ctrl\+R Revise unanswered/);
-assert.match(plainText(readinessFrames[2]!), /Q2: Second readiness[\s\S]*Ctrl\+Enter Review answered[\s\S]*Ctrl\+R Revise unanswered/);
+assert.match(plainText(readinessFrames[1]!), /\(●\) 1\. One[\s\S]*Enter Next[\s\S]*Ctrl\+Enter Review answered[\s\S]*Ctrl\+R Regenerate unanswered/);
+assert.match(plainText(readinessFrames[2]!), /Q2: Second readiness[\s\S]*Ctrl\+Enter Review answered[\s\S]*Ctrl\+R Regenerate unanswered/);
 assert.match(plainText(readinessFrames.at(-1)!), /Review your answers[\s\S]*Note: context/);
 assert.match(plainText(readinessFrames.at(-1)!), /Enter Submit/);
 
@@ -1245,7 +1245,7 @@ const regenerateBatch = registerTools([], regenerateEntries).get("ask_questions"
 const regenerateParams = {
 	questions: [
 		{ question: "Resolved choice", options: [{ label: "Alpha" }] },
-		{ question: "Needs revision", details: "Original context", options: [{ label: "Beta" }] },
+		{ question: "Needs regeneration", details: "Original context", options: [{ label: "Beta" }] },
 	],
 };
 const regenerated = await executeCustomUI(regenerateBatch, regenerateParams, ["\r", TAB, "important note", CTRL_R]);
@@ -1254,26 +1254,26 @@ assert.equal(regenerated.result.details.answers.length, 1);
 assert.equal(regenerated.result.details.answers[0].questionIndex, 0);
 assert.equal(regenerated.result.details.answers[0].note, "important note");
 assert.deepEqual(regenerated.result.details.unansweredQuestions, [{
-	question: "Needs revision",
+	question: "Needs regeneration",
 	label: undefined,
 	details: "Original context",
 	mode: "single-select",
 	options: [{ label: "Beta", value: "Beta", description: undefined, recommended: undefined }],
 }]);
 assert.match(regenerated.result.content[0].text, /Do not repeat resolved questions/);
-assert.match(regenerated.result.content[0].text, /Immediately call ask_questions again with revised unanswered questions only/);
-assert.match(regenerated.result.content[0].text, /Unanswered Q2: Needs revision/);
+assert.match(regenerated.result.content[0].text, /Immediately call ask_questions again with regenerated unanswered questions only/);
+assert.match(regenerated.result.content[0].text, /Unanswered Q2: Needs regeneration/);
 assert.match(regenerated.result.content[0].text, /Details: Original context/);
 assert.match(regenerated.result.content[0].text, /Answer mode: single-select \(choose one choice\)/);
 assert.match(regenerated.result.content[0].text, /Choices:\n- Beta/);
 
-const reviseActionFrames = await captureToolRender(regenerateBatch, regenerateParams, {
+const regenerateActionFrames = await captureToolRender(regenerateBatch, regenerateParams, {
 	inputs: ["\r", TAB, TAB, TAB],
 	widths: [80],
 });
-assert.match(plainText(reviseActionFrames[1]!), /Ctrl\+R Revise unanswered/);
-assert.doesNotMatch(plainText(reviseActionFrames.at(-1)!), /→ .*Revise unanswered|Tab action|Enter activate/);
-assert.ok(reviseActionFrames.flat().every((line) => visibleWidth(line) <= 80));
+assert.match(plainText(regenerateActionFrames[1]!), /Ctrl\+R Regenerate unanswered/);
+assert.doesNotMatch(plainText(regenerateActionFrames.at(-1)!), /→ .*Regenerate unanswered|Tab action|Enter activate/);
+assert.ok(regenerateActionFrames.flat().every((line) => visibleWidth(line) <= 80));
 
 const responsiveWidths = [80, 50, 34, 20];
 const responsiveActionFrames = await captureToolRender(regenerateBatch, regenerateParams, {
@@ -1286,7 +1286,7 @@ for (const [index, width] of responsiveWidths.entries()) {
 	const text = plainText(frame);
 	assert.ok(frame.every((line) => visibleWidth(line) <= width), `action bar must fit width ${width}`);
 	assert.doesNotMatch(text, /1 (?:left|unanswered)/, `remaining count must not duplicate top progress at width ${width}`);
-	assert.match(text, /Ctrl\+R Revise(?: unanswered)?/, `Revise action must stay visible at width ${width}`);
+	assert.match(text, /Ctrl\+R Regenerate(?: unanswered)?/, `Regenerate action must stay visible at width ${width}`);
 	assert.match(text, /Add note/, `Add note must stay visible at width ${width}`);
 	assert.match(text, /←→\s+Questions/, `question navigation must stay visible at width ${width}`);
 	assert.ok(/^─+$/.test(plainText([frame.at(-1)!])), `batch UI needs a distinct bottom edge at width ${width}`);
@@ -1300,7 +1300,7 @@ const shortNarrowAction = await captureToolRender(regenerateBatch, regeneratePar
 const shortNarrowFrame = shortNarrowAction.at(-1)!;
 assert.ok(shortNarrowFrame.length <= 8);
 assert.ok(shortNarrowFrame.every((line) => visibleWidth(line) <= 20));
-assert.match(plainText(shortNarrowFrame), /Enter Next[\s\S]*Ctrl\+R Revise(?: unanswered)?/);
+assert.match(plainText(shortNarrowFrame), /Enter Next[\s\S]*Ctrl\+R Regenerate(?: unanswered)?/);
 assert.match(plainText(shortNarrowFrame), /Add\s+note[\s\S]*←→\s+Questions|←→\s+Questions[\s\S]*Add\s+note/);
 assert.ok(/^─+$/.test(plainText([shortNarrowFrame.at(-1)!])), "short batch UI keeps its bottom edge");
 
@@ -1316,7 +1316,7 @@ for (const scenario of [
 		name: "staged",
 		params: regenerateParams,
 		inputs: ["\r"],
-		expected: [/Enter Next/, /Ctrl\+R Revise(?: unanswered)?/, /Tab Add note/, /←→ Questions/],
+		expected: [/Enter Next/, /Ctrl\+R Regenerate(?: unanswered)?/, /Tab Add note/, /←→ Questions/],
 	},
 	{
 		name: "editing",
@@ -1364,14 +1364,14 @@ for (const scenario of [
 const regeneratedWithRemainingNote = await executeCustomUI(
 	regenerateBatch,
 	regenerateParams,
-	["\r", "\r", TAB, "revise around this", CTRL_R],
+	["\r", "\r", TAB, "regenerate around this", CTRL_R],
 );
 assert.deepEqual(regeneratedWithRemainingNote.result.details.unansweredNotes, [
-	{ questionIndex: 1, note: "revise around this" },
+	{ questionIndex: 1, note: "regenerate around this" },
 ]);
 assert.match(
 	regeneratedWithRemainingNote.result.content[0].text,
-	/Unanswered Q2: Needs revision[\s\S]*Choices:\n- Beta\nNote: revise around this/,
+	/Unanswered Q2: Needs regeneration[\s\S]*Choices:\n- Beta\nNote: regenerate around this/,
 );
 
 const directCustomRegenerate = await executeCustomUI(
@@ -1387,14 +1387,14 @@ assert.deepEqual(directCustomRegenerate.result.details.answers[0].answer, {
 });
 
 const regenerateTranscript = regenerateBatch.renderResult!(regenerated.result, {}, transcriptTheme).render(80).join("\n");
-assert.match(regenerateTranscript, /Revise 1 unanswered/);
+assert.match(regenerateTranscript, /Regenerate 1 unanswered/);
 
 const invalidRegenerate = await captureToolRender(regenerateBatch, regenerateParams, { inputs: [CTRL_R] });
 assert.match(plainText(invalidRegenerate.at(-1)!), /Answer a question first\./);
-assert.doesNotMatch(plainText(invalidRegenerate.at(-1)!), /Ctrl\+R Revise unanswered/);
+assert.doesNotMatch(plainText(invalidRegenerate.at(-1)!), /Ctrl\+R Regenerate unanswered/);
 const completeRegenerate = await captureToolRender(regenerateBatch, regenerateParams, { inputs: ["\r", "\r", "\r", "\r", CTRL_R] });
 assert.match(plainText(completeRegenerate.at(-1)!), /Review your answers/);
-assert.doesNotMatch(plainText(completeRegenerate.at(-1)!), /Revise unanswered|All answered\. Use Review\./);
+assert.doesNotMatch(plainText(completeRegenerate.at(-1)!), /Regenerate unanswered|All answered\. Use Review\./);
 const allAnsweredFeedback = await captureToolRender(regenerateBatch, regenerateParams, {
 	inputs: ["\r", "\r", "\r", "\r", "\x1b", CTRL_R],
 });
@@ -1776,7 +1776,7 @@ assert.equal(batchClarification.result.details.answers[0].note, "Keep durable");
 assert.deepEqual(batchClarification.result.details.unansweredQuestions.map((q: any) => q.question), ["Pick cache"]);
 assert.match(batchClarification.result.content[0].text, /Current unresolved question: Q2: Pick cache/);
 assert.match(batchClarification.result.content[0].text, /Do not repeat resolved questions/);
-assert.match(batchClarification.result.content[0].text, /immediately call ask_questions again with revised unanswered questions only/);
+assert.match(batchClarification.result.content[0].text, /immediately call ask_questions again with regenerated unanswered questions only/);
 
 // The current tab remains the question to revisit even if it already has a
 // staged answer; its semantic draft is returned instead of being called resolved.

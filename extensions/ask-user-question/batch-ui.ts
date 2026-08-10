@@ -698,7 +698,7 @@ export class TabbedQuestions {
 		const tokenBudget = Math.max(1, width - visibleWidth(indent));
 		const compactVariants = new Map<string, string[]>([
 			["Ctrl+Enter Review answered", ["^Enter Review"]],
-			["Ctrl+R Revise unanswered", ["Ctrl+R Revise"]],
+			["Ctrl+R Regenerate unanswered", ["Ctrl+R Regenerate"]],
 			["Answers entered", ["Has answers"]],
 			["Esc again to cancel", ["Esc again"]],
 			["Space Toggle", ["Space"]],
@@ -739,7 +739,7 @@ export class TabbedQuestions {
 		}
 		const clarificationAction = ["Ctrl+? Ask agent"];
 		const partialActions = this.canRegenerate()
-			? ["Ctrl+Enter Review answered", "Ctrl+R Revise unanswered"]
+			? ["Ctrl+Enter Review answered", "Ctrl+R Regenerate unanswered"]
 			: [];
 		if (this.editMode) {
 			row(["Editing", "Enter Save", "Ctrl+C Clear", ...partialActions, ...clarificationAction, "Esc Back"], "accent");

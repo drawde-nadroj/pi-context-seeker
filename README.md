@@ -48,7 +48,7 @@ Give the agent as much relevant context as you can, especially context already s
 
 More useful context usually produces better work. A question batch creates a quick path to shared understanding: answer what you know, add notes where nuance matters, and ask the agent for clarification from inside any question you do not understand.
 
-### Revise unanswered questions
+### Regenerate unanswered questions
 
 You do not have to finish a batch whose later questions no longer fit. After answering at least one question, leave the questions that need rethinking unanswered and press **Ctrl+R**. The plugin returns your completed answers and notes to the agent as new context, preserves them as resolved, and asks the agent to replace only the unanswered questions. The next batch can therefore adapt to everything you have said without making you answer the same questions again.
 
@@ -56,12 +56,12 @@ This loop can continue until you and the agent share enough context to proceed:
 
 1. The agent asks a broad, useful batch.
 2. Your answers change or sharpen its understanding.
-3. **Revise unanswered** replaces stale questions with better ones.
+3. **Regenerate unanswered** replaces stale questions with better ones.
 4. The agent starts the work once the important unknowns are resolved.
 
 ### Submit answered questions and skip the rest
 
-When the answers you have already provided are enough, press **Ctrl+Enter**. The review clearly marks every unanswered question as **skipped** and keeps **Enter Submit** as a separate confirmation. This is distinct from **Escape**, which cancels the whole batch, and **Ctrl+R**, which asks the agent to revise the unanswered questions.
+When the answers you have already provided are enough, press **Ctrl+Enter**. The review clearly marks every unanswered question as **skipped** and keeps **Enter Submit** as a separate confirmation. This is distinct from **Escape**, which cancels the whole batch, and **Ctrl+R**, which asks the agent to regenerate the unanswered questions.
 
 ### Questions as context management
 
@@ -72,7 +72,7 @@ The dialog is also a small context editor. It gives you control over both the sh
 - **Notes separate the rule from the exception.** Keep the main answer easy to interpret while attaching caveats, conditions, or reasoning to that question.
 - **Review prevents accidental context.** A batch is not final until you inspect and submit it.
 - **Clarification prevents false agreement.** Ask the agent what a question means before committing an answer to something you may have misunderstood.
-- **Revision keeps context current.** Resolved answers remain explicit context while stale unanswered questions are reformulated rather than silently becoming assumptions.
+- **Regeneration keeps context current.** Resolved answers remain explicit context while stale unanswered questions are regenerated rather than silently becoming assumptions.
 
 The result is higher-signal conversation history. Instead of mixing requirements, uncertainty, corrections, and guesses into one long message, the tool returns structured answers and notes that show what you chose, what you qualified, and what still needs work.
 
@@ -93,14 +93,14 @@ These tools share the same basic goal, but optimize for different workflows. Thi
 | Per-question answer notes | **Yes** | Limited to supported preview/annotation flows | No |
 | Review before final submission | **Yes** | **Yes** | Batch submission, but no separate review screen |
 | Ask the agent for clarification inside the dialog | **Yes** | **Yes** — **Chat about this** | No |
-| Dedicated “revise unanswered only” action | **Yes** | Partial — chat can lead Claude to reformulate questions | No |
+| Dedicated “regenerate unanswered only” action | **Yes** | Partial — chat can lead Claude to reformulate questions | No |
 | Explicit partial submit that marks the rest skipped | **Yes** | No | No |
-| Preserve resolved answers while questions are revised | **Yes** | Partial — current answers are returned as clarification context | No dedicated revision flow |
+| Preserve resolved answers while questions are regenerated | **Yes** | Partial — current answers are returned as clarification context | No dedicated regeneration flow |
 | Visual/code previews for options | No | **Yes** | No |
 | Structured result returned to the agent | **Yes** | **Yes** | **Yes** |
 | Availability | Pi interactive TUI | Claude Code | Depends on the active Codex mode and tool list |
 
-The main difference is not merely how many questions fit in one dialog. This package is designed for a longer **question → answer → revise → shared understanding** loop, with native free-form input and per-question notes. Claude Code has a smaller batch limit and richer option previews. Codex keeps the interaction compact and decision-oriented.
+The main difference is not merely how many questions fit in one dialog. This package is designed for a longer **question → answer → regenerate → shared understanding** loop, with native free-form input and per-question notes. Claude Code has a smaller batch limit and richer option previews. Codex keeps the interaction compact and decision-oriented.
 
 > **Preview:** No screenshot or animation is included yet. Contributions of an accurate demo are welcome.
 
@@ -108,7 +108,7 @@ The main difference is not merely how many questions fit in one dialog. This pac
 
 - Optional question details and recommended-choice badges
 - Width-aware terminal rendering and serialized dialogs
-- Structured results for answered, cancelled, unavailable, revision, and clarification states
+- Structured results for answered, cancelled, unavailable, regeneration, and clarification states
 
 ## Installation
 
@@ -225,7 +225,7 @@ Controls vary with the active field; the UI shows the available actions.
 - **Ctrl+C**: clear the active text editor where shown
 - **Escape**: go back, clear/cancel, or require a second press when answers would be discarded
 - **Ctrl+Enter** (batch): review answered questions and mark the rest skipped
-- **Ctrl+R**: revise unanswered batch questions when some questions are already resolved
+- **Ctrl+R**: regenerate unanswered batch questions when some questions are already resolved
 - **Ctrl+?** (Ctrl+/ equivalent): ask the agent for clarification; Enter sends it and Escape returns
 
 ## Non-TUI behavior

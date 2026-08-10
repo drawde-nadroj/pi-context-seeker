@@ -315,7 +315,7 @@ export function buildRegenerateResult(questions: QuestionDef[], answers: TabAnsw
 	const unansweredNoteByIndex = new Map(unansweredNotes.map((entry) => [entry.questionIndex, entry.note]));
 	const lines = [
 		"Regenerate the remaining batch questions now using the user's new understanding below.",
-		"Do not repeat resolved questions. Immediately call ask_questions again with revised unanswered questions only.",
+		"Do not repeat resolved questions. Immediately call ask_questions again with regenerated unanswered questions only.",
 	];
 	for (const entry of answered) {
 		const question = questions[entry.questionIndex];
@@ -384,7 +384,7 @@ export function buildBatchClarificationResult(questions: QuestionDef[], answers:
 	const base = buildRegenerateResult(questions, unresolvedAnswers);
 	const lines = [
 		`The user paused the batch to ask: ${clarification}`,
-		"Answer the clarification in normal assistant text, then immediately call ask_questions again with revised unanswered questions only before continuing work.",
+		"Answer the clarification in normal assistant text, then immediately call ask_questions again with regenerated unanswered questions only before continuing work.",
 		"Do not repeat resolved questions. Committed answers and notes are resolved context.",
 		`Current unresolved question: Q${activeQuestionIndex + 1}: ${questions[activeQuestionIndex]?.question ?? "(unknown)"}`,
 	];
