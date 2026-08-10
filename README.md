@@ -12,10 +12,11 @@ call out the unknown!
 - recommended options first if you're more of a glancer 
 - shared understanding, less assumptions, it's always cheaper to ask!
 
-- already interested? check out [nstallation](#installation)! hope you enjoy :)
+- already interested? check out [installation](#installation)! hope you enjoy :)
 
 **Usage:**
 - best for work where understanding grows as decisions compound
+  - dictation in the notes + regeneration is good for getting the thoughts out
 - the most fruitful conversations happen at the edge of shared understanding
 
 ## everything underneath is vibed but the above is Lived
