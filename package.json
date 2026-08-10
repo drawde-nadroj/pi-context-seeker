@@ -1,6 +1,6 @@
 {
   "name": "pi-context-seeker",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Adaptive questions for building precise, token-efficient shared context between Pi agents and users",
   "license": "MIT",
   "author": "Jordan (the-sleeping-teemo)",
