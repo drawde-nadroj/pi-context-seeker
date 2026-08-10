@@ -332,10 +332,9 @@ export class TabbedQuestions {
 		this.tui.requestRender();
 	}
 
-	/** Switch from UI-only Preview to Compose without letting shared controls leak. */
-	private composeViewedQuestion(): void {
-		if (this.viewedQuestionIndex !== this.activeTab) this.selectTab(this.viewedQuestionIndex);
-		// Shared question controls stay visually read-only while clarification owns focus.
+	/** Return from UI-only Preview to Compose on its immutable origin. */
+	private composeOriginQuestion(): void {
+		this.viewedQuestionIndex = this.activeTab;
 		this.editor.focused = false;
 		this.otherEditor.focused = false;
 		this.noteEditor.focused = false;
@@ -473,7 +472,7 @@ export class TabbedQuestions {
 					for (let index = 0; index < count; index++) this.getOrCreatePreviewChoiceList(question, this.viewedQuestionIndex).handleInput(direction);
 				}
 			} else if (matchesKey(data, Key.escape)) {
-				if (this.clarificationPreview) this.composeViewedQuestion();
+				if (this.clarificationPreview) this.composeOriginQuestion();
 				this.clarificationMode = false;
 				this.clarificationPreview = false;
 				this.clarificationEditor.focused = false;
@@ -482,7 +481,7 @@ export class TabbedQuestions {
 				else if (this.getActiveTab()?.mode === "text") this.editor.focused = this._focused;
 				this.feedback = "";
 			} else if (matchesKey(data, Key.tab) || matchesKey(data, Key.shift("tab"))) {
-				if (this.clarificationPreview) this.composeViewedQuestion();
+				if (this.clarificationPreview) this.composeOriginQuestion();
 				else {
 					this.clarificationPreview = true;
 					this.clarificationEditor.focused = false;
@@ -853,8 +852,8 @@ export class TabbedQuestions {
 			return lines;
 		}
 		const clarificationAction = action(this.clarificationTurns.length > 0
-			? "Ctrl+? Follow up"
-			: "Ctrl+? Clarify");
+			? "Ctrl+/ Follow up with agent"
+			: "Ctrl+/ Ask agent");
 		const partialActions = this.canRegenerate()
 			? [action("Ctrl+Enter Review answered", "success"), action("Ctrl+R Regenerate unanswered")]
 			: [];
@@ -905,36 +904,107 @@ export class TabbedQuestions {
 		return lines;
 	}
 
-	private renderClarificationBar(width: number): string[] {
+	private renderClarificationPanel(width: number, height: number): string[] {
+		const add = (lines: string[], text: string) => lines.push(truncateToWidth(text, width));
+		const firstFitting = (variants: string[]) => variants.find((variant) => visibleWidth(variant) <= width) ?? variants.at(-1)!;
 		if (this.clarificationPreview) {
-			return [truncateToWidth(this.theme.bg("selectedBg", this.theme.fg("accent", " Preview · ←/→ Qs · ↑/↓ · Tab Compose · Esc")), width)];
+			const lines: string[] = [];
+			const n = this.viewedQuestionIndex + 1;
+			const label = firstFitting([
+				` Read-only preview Q${n}/${this.questions.length} · ←/→ Question · ↑/↓ Scroll · Tab Back · Esc Close`,
+				` Q${n}/${this.questions.length} · ←→ · ↑↓ · Tab Back · Esc Close`,
+				` Q${n}/${this.questions.length} · ←→ · ↑↓ · Tab · Esc`,
+			]);
+			add(lines, this.theme.bg("selectedBg", this.theme.fg("accent", label)));
+			return lines;
 		}
-		if (this.feedback) return [truncateToWidth(this.theme.bg("selectedBg", this.theme.fg("warning", ` ${this.feedback} · Esc`)), width)];
-		const preferredLabel = width < 24 ? " ? " : " Clarify: ";
-		const preferredHint = width >= 48 ? " · Tab Preview · Enter Ask · Esc" : width >= 30 ? " · Tab · Enter · Esc" : "";
-		// The editor caret is the irreducible cell. Decorations may use only the
-		// remaining columns so truncation can never hide hardware/software carets.
-		const decorationBudget = Math.max(0, width - 1);
-		const label = truncateLabel(preferredLabel, Math.min(visibleWidth(preferredLabel), decorationBudget));
-		const hintBudget = Math.max(0, decorationBudget - visibleWidth(label));
-		const hint = truncateLabel(preferredHint, Math.min(visibleWidth(preferredHint), hintBudget));
-		const editorWidth = Math.max(1, width - visibleWidth(label) - visibleWidth(hint));
-		const innerLines = this.clarificationEditor.render(editorWidth).slice(1, -1);
-		const cursorLine = innerLines.find((line) => line.includes(CURSOR_MARKER));
-		const editorLine = cursorLine ?? innerLines.at(-1) ?? "";
-		const renderedEditor = cursorLine ? renderSoftwareCaret(editorLine) : sanitizeEditorDisplay(editorLine);
-		return [truncateToWidth(this.theme.bg("selectedBg", `${this.theme.fg("accent", label)}${renderedEditor}${this.theme.fg("muted", hint)}`), width)];
+
+		const panelHeight = Math.max(0, height);
+		if (panelHeight === 0) return [];
+		const controls = firstFitting([
+			" Tab Preview · Enter Send · Esc Back",
+			" Tab View · Enter Send · Esc Back",
+			" Tab · Enter · Esc",
+			" ⇥ · ↵ · Esc",
+		]);
+		const notice = firstFitting([
+			" Clean later questions may update.",
+			" Later questions may update.",
+			" Later Qs may update.",
+		]);
+		const latest = [...this.clarificationTurns].reverse().find((turn) => turn.role === "assistant");
+		const response: string[] = [];
+		if (latest) addWrapped(response, this.theme.fg("muted", ` Agent: ${sanitizeDisplayText(latest.content)}`), width);
+
+		const rendered = this.clarificationEditor.render(Math.max(1, width));
+		// For a feasible three-row panel, editor/caret, controls, and adaptive
+		// notice are mandatory. Optional rows may use only space left after the
+		// draft's naturally rendered height, capped by the available panel.
+		let optionalRows = Math.max(0, panelHeight - 2 - Math.min(rendered.length, Math.max(1, panelHeight - 2)));
+		const showFeedbackRow = Boolean(this.feedback) && optionalRows > 0;
+		if (showFeedbackRow) optionalRows--;
+		const showHeading = optionalRows > 0;
+		if (showHeading) optionalRows--;
+		const responseRows = Math.min(2, response.length, optionalRows);
+		const lines: string[] = [];
+		if (responseRows > 0) {
+			const shown = response.slice(0, responseRows).map((line) => truncateToWidth(line, width));
+			if (response.length > responseRows && shown.length) shown[shown.length - 1] = width > 1
+				? `${truncateToWidth(shown.at(-1)!, width - 1)}…`
+				: truncateToWidth("…", width);
+			lines.push(...shown);
+		}
+		if (showFeedbackRow) add(lines, this.theme.fg("warning", ` ${this.feedback}`));
+		if (showHeading) add(lines, this.theme.fg("accent", width < 12 ? " Ask" : " Ask agent"));
+
+		const editorBudget = Math.min(rendered.length, Math.max(1, panelHeight - lines.length - 2));
+		const renderEditorLine = (line: string) => add(lines, line.includes(CURSOR_MARKER) ? renderSoftwareCaret(line) : sanitizeEditorDisplay(line));
+		if (editorBudget >= 3 && rendered.length >= 3) {
+			const body = rendered.slice(1, -1);
+			const bodyBudget = editorBudget - 2;
+			const caret = Math.max(0, body.findIndex((line) => line.includes(CURSOR_MARKER)));
+			const start = Math.max(0, Math.min(caret - Math.floor(bodyBudget / 2), body.length - bodyBudget));
+			renderEditorLine(rendered[0]!);
+			for (const line of body.slice(start, start + bodyBudget)) renderEditorLine(line);
+			renderEditorLine(rendered.at(-1)!);
+		} else {
+			const caret = Math.max(0, rendered.findIndex((line) => line.includes(CURSOR_MARKER)));
+			const start = Math.max(0, Math.min(caret - Math.floor(editorBudget / 2), rendered.length - editorBudget));
+			for (const line of rendered.slice(start, start + editorBudget)) renderEditorLine(line);
+		}
+
+		let controlsLine = controls;
+		if (this.feedback && !showFeedbackRow) controlsLine = firstFitting([
+			` ${this.feedback} ·${controls}`,
+			" Required · Tab · Enter · Esc",
+			" Required ⇥ ↵ Esc",
+			" ! ⇥ ↵ Esc",
+		]);
+		add(lines, this.theme.fg(this.feedback && !showFeedbackRow ? "warning" : "muted", controlsLine));
+		add(lines, this.theme.fg("dim", notice));
+		return lines.slice(-panelHeight);
 	}
 
 	render(width: number): string[] {
 		if (this.cachedLines && this.cachedWidth === width && this.cachedRows === this.tui.terminal?.rows) return this.cachedLines;
 		const terminalRows = this.tui.terminal?.rows ?? 40;
 		const presentationIndex = this.clarificationMode ? this.viewedQuestionIndex : this.activeTab;
-		const clarificationBar = this.clarificationMode ? this.renderClarificationBar(width) : [];
-		const normalRows = Math.max(1, terminalRows - clarificationBar.length);
-		const lines = this.renderQuestionFrame(width, presentationIndex, normalRows, terminalRows, this.clarificationMode);
-		lines.push(...clarificationBar);
-		constrainFrameHeight(lines, terminalRows, clarificationBar.length);
+		let lines: string[];
+		if (!this.clarificationMode) {
+			lines = this.renderQuestionFrame(width, presentationIndex, terminalRows, terminalRows, false);
+		} else if (this.clarificationPreview) {
+			const panel = this.renderClarificationPanel(width, 1);
+			lines = this.renderQuestionFrame(width, presentationIndex, Math.max(1, terminalRows - panel.length), terminalRows, true);
+			lines.push(...panel);
+		} else {
+			const desiredContextRows = Math.max(1, Math.min(16, Math.floor(terminalRows * 0.55)));
+			const minimumPanelRows = terminalRows >= 4 ? 3 : Math.max(1, terminalRows - 1);
+			const contextBudget = Math.max(1, Math.min(desiredContextRows, terminalRows - minimumPanelRows));
+			lines = this.renderQuestionFrame(width, this.activeTab, contextBudget, terminalRows, true);
+			const panelRows = Math.max(minimumPanelRows, terminalRows - lines.length);
+			lines.push(...this.renderClarificationPanel(width, panelRows));
+		}
+		constrainFrameHeight(lines, terminalRows, this.clarificationMode ? Math.min(2, terminalRows) : 2);
 		this.cachedWidth = width;
 		this.cachedRows = this.tui.terminal?.rows;
 		this.cachedLines = lines;
@@ -952,6 +1022,21 @@ export class TabbedQuestions {
 			addWrapped(result, text, width);
 			return result;
 		};
+		if (readOnly && !this.reviewing && frameRows <= 5) {
+			const question = this.questions[presentationIndex];
+			const tab = this.tabs[presentationIndex];
+			const compactQuestion = sanitizeDisplayText(question.question).replace(/[\r\n\t]+/g, " ");
+			add(th.fg("accent", th.bold(`Q${presentationIndex + 1}: ${compactQuestion}`)));
+			const availableLines = Math.max(1, frameRows - 1);
+			if (tab.mode === "text") {
+				this.renderTextTab(width, lines, add, th, this.readOnlyQuestionEditor(tab.textBuffer));
+			} else if (tab.mode === "single-select") {
+				this.renderSingleSelectTab(width, lines, add, th, tab, question, availableLines, presentationIndex, true);
+			} else {
+				this.renderMultiSelectTab(width, lines, add, th, question, tab, availableLines, presentationIndex, true);
+			}
+			return lines.slice(0, frameRows);
+		}
 		add(th.fg("borderMuted", "─".repeat(width)));
 
 		// Show every semantic label when it fits. Under pressure, inactive
@@ -1116,7 +1201,7 @@ export class TabbedQuestions {
 		const tab = this.tabs[presentationIndex];
 		const q = this.questions[presentationIndex];
 
-		const actionLines = this.renderActionBar(width, presentationIndex);
+		const actionLines = readOnly ? [] : this.renderActionBar(width, presentationIndex);
 		const questionHeading = wrapped(th.fg("accent", th.bold(`Q${presentationIndex + 1}: ${sanitizeDisplayText(q.question)}${this.updatedQuestionIds.has(q.id!) ? "  Updated" : ""}`)));
 
 		// Only the original interactive question heading is accent-colored.
@@ -1127,11 +1212,12 @@ export class TabbedQuestions {
 		const noteEditor = presentationIndex === this.activeTab
 			? this.noteEditor
 			: this.readOnlyNoteEditor(tab.note);
-		// Clarification owns actual focus, but the active question keeps the same
-		// note-editing presentation until ordinary ownership is restored.
-		const noteIsFocused = presentationIndex === this.activeTab && this.noteFocused;
+		// Clarification owns actual focus. Empty notes have no read-only action;
+		// populated notes remain visible as context without an editing caret.
+		const noteIsFocused = !readOnly && presentationIndex === this.activeTab && this.noteFocused;
+		const showNote = !readOnly || Boolean(tab.note.trim());
 		const notePreview: string[] = [];
-		renderOptionalNote(notePreview, width, th, noteEditor, noteIsFocused, tab.mode === "multi-select" ? 9 : tab.mode === "single-select" ? 6 : 2);
+		if (showNote) renderOptionalNote(notePreview, width, th, noteEditor, noteIsFocused, tab.mode === "multi-select" ? 9 : tab.mode === "single-select" ? 6 : 2);
 		const reservedTailLines = notePreview.length + (compactHeight ? 0 : 2) + actionLines.length + 2;
 		// Always render the current widget row. The final body viewport may evict
 		// heading/detail rows, but it must keep the selected option reachable.
@@ -1144,12 +1230,12 @@ export class TabbedQuestions {
 			this.renderMultiSelectTab(width, lines, add, th, q, tab, availableBodyLines, presentationIndex, readOnly);
 		}
 
-		if (this.feedback) add(th.fg("warning", ` ${this.feedback}`));
+		if (this.feedback && !readOnly) add(th.fg("warning", ` ${this.feedback}`));
 		if (!compactHeight) lines.push("");
 
 		// A native one-line note action, not a second bordered editor panel.
 		const noteIndent = tab.mode === "multi-select" ? 9 : tab.mode === "single-select" ? 6 : 2;
-		renderOptionalNote(lines, width, th, noteEditor, noteIsFocused, noteIndent);
+		if (showNote) renderOptionalNote(lines, width, th, noteEditor, noteIsFocused, noteIndent);
 
 		if (!compactHeight) lines.push("");
 

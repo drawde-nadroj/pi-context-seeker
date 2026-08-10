@@ -161,7 +161,7 @@ export function isSubmitEnter(data: string): boolean {
 	return matchesKey(data, Key.enter) && !matchesKey(data, Key.ctrl("j"));
 }
 
-/** Ctrl+? with Ctrl+/ as an equivalent enhanced-terminal encoding. */
+/** Ask agent accepts both Ctrl+/ and the equivalent Ctrl+? terminal encoding. */
 export function isAskAgentKey(data: string): boolean {
 	return matchesKey(data, Key.ctrl("?"))
 		|| matchesKey(data, Key.ctrl("/"));

@@ -100,7 +100,7 @@ const cases: Array<[string, () => Promise<void>]> = [
 		assert.doesNotMatch(viewed.frames[0], /Question overview|Enter Open/);
 		assert.equal(viewed.result.details.status, "cancelled");
 	}],
-	["Ctrl+? reuses the exact normal progress, question widget, note, and footer renderer", async () => {
+	["Ask agent reuses normal question context without ordinary controls", async () => {
 		const id = "shared-renderer";
 		const s = state(id);
 		s.questions[0].options[0].recommended = true;
@@ -112,22 +112,107 @@ const cases: Array<[string, () => Promise<void>]> = [
 		const viewed = await interact(register().get("resume_questions"), resume(id), [ESC, CTRL_QUESTION, ESC], awaiting(id, s));
 		const normal = viewed.frames[1].split("\n");
 		const compose = viewed.frames[2].split("\n");
-		assert.deepEqual(compose.slice(0, -1), normal, "Compose only appends its compact bar");
-		for (const token of ["Q1", "Choose database", "Primary durable store", "Postgres", "Recommended", "Preferred durable choice", "Keep replicas nearby", "Enter Next", "←→ Questions"]) {
-			assert.match(normal.join("\n"), new RegExp(token));
+		for (const token of ["Q1", "Choose database", "Primary durable store", "Postgres", "Recommended", "Preferred durable choice", "Keep replicas nearby"]) assert.match(compose.join("\n"), new RegExp(token));
+		assert.doesNotMatch(compose.join("\n"), /Enter Next|Tab Add note|←→ Questions/);
+		assert.match(compose.join("\n"), /Tab Preview · Enter Send · Esc Back/);
+		assert.match(compose.join("\n"), /Clean later questions may update\./);
+	}],
+	["Compose gives its three mandatory rows priority at heights 4–7, including blank feedback", async () => {
+		for (const rows of [4, 5, 6, 7]) {
+			const viewed = await interact(register().get("ask_questions"), { questions }, [CTRL_QUESTION, "\r"], [], rows, 80);
+			for (const [stateName, frame] of [["compose", viewed.frames[1]], ["blank feedback", viewed.frames[2]]] as const) {
+				const lines = frame.split("\n");
+				assert.equal(lines.length, rows, `rows ${rows} ${stateName}: every available row is allocated`);
+				assert.ok(lines.every((line) => visibleWidth(line) <= 80), `rows ${rows} ${stateName}: columns fit`);
+				assert.match(frame, /Q1|Choose database/, `rows ${rows} ${stateName}: context identity remains`);
+				assert.ok(frame.includes(CURSOR_MARKER), `rows ${rows} ${stateName}: caret remains`);
+				assert.match(frame, /Tab Preview · Enter Send · Esc Back/, `rows ${rows} ${stateName}: controls remain truthful`);
+				assert.match(frame, /Clean later questions may update\./, `rows ${rows} ${stateName}: mandatory notice remains`);
+			}
+			assert.match(viewed.frames[2], /Question required\./, `rows ${rows}: blank feedback remains visible`);
 		}
 	}],
-	["rows 20 keeps ordinary visual mode when clarification takes one body row", async () => {
-		const viewed = await interact(register().get("ask_questions"), { questions }, [CTRL_QUESTION], [], 20, 80);
-		const normal = viewed.frames[0].split("\n");
-		const composeBody = viewed.frames[1].split("\n").slice(0, -1);
-		const normalChoice = normal.findIndex((line) => line.includes("Postgres"));
-		const composeChoice = composeBody.findIndex((line) => line.includes("Postgres"));
-		const normalNote = normal.findIndex((line) => line.includes("+ Add note"));
-		const composeNote = composeBody.findIndex((line) => line.includes("+ Add note"));
-		assert.deepEqual(composeBody.slice(0, composeChoice), normal.slice(0, normalChoice), "heading chrome and full-height spacing stay unchanged");
-		assert.deepEqual(composeBody.slice(composeNote - 1), normal.slice(normalNote - 1), "note/footer chrome and full-height spacing stay unchanged");
-		assert.equal(composeBody.length, normal.length - 1, "only the body viewport yields one row to the appended bar");
+	["constrained multi-select Compose retains question identity and active answer state", async () => {
+		const multi = [{ question: "Choose\nsafeguards", options: [{ label: "Backups" }, { label: "Monitoring" }, { label: "Failover" }], multiSelect: true }];
+		for (const rows of [8, 9, 10]) {
+			const viewed = await interact(register().get("ask_questions"), { questions: multi }, [CTRL_QUESTION], [], rows, 80, plainTheme);
+			const frame = viewed.frames[1];
+			assert.match(frame, /Q1: Choose safeguards/, `rows ${rows}: multiline question identity stays on one row`);
+			assert.match(frame, /Select options below|Backups/, `rows ${rows}: active answer state remains`);
+			assert.ok(frame.includes(CURSOR_MARKER), `rows ${rows}: Ask agent caret remains`);
+			assert.match(frame, /Tab Preview · Enter Send · Esc Back/);
+			assert.match(frame, /Clean later questions may update\./);
+			assert.ok(frame.split("\n").length <= rows, `rows ${rows}: frame fits`);
+		}
+	}],
+	["Compose and Preview suppress ordinary actions and empty note affordances", async () => {
+		const viewed = await interact(register().get("ask_questions"), { questions }, [CTRL_QUESTION, TAB], [], 20, 80);
+		for (const frame of viewed.frames.slice(1)) {
+			assert.doesNotMatch(frame, /Enter (?:Next|Select)|Tab Add note|\+ Add note|←→ Questions|←\/→ Questions/);
+		}
+		assert.match(viewed.frames[1], /Tab Preview · Enter Send · Esc Back/);
+	}],
+	["narrow batch controls remain truthful and blank feedback shares the row", async () => {
+		for (const width of [12, 18, 24, 34]) {
+			const viewed = await interact(register().get("ask_questions"), { questions }, [CTRL_QUESTION, "\r"], [], 4, width, plainTheme);
+			const frame = viewed.frames[2];
+			assert.ok(frame.split("\n").every((line) => visibleWidth(line) <= width), `width ${width}: frame fits`);
+			assert.ok(frame.includes(CURSOR_MARKER), `width ${width}: caret remains`);
+			assert.match(frame, /Required|!/, `width ${width}: blank feedback remains`);
+			assert.match(frame, /Tab|⇥/, `width ${width}: Preview key remains`);
+			assert.match(frame, /Enter|↵/, `width ${width}: Send key remains`);
+			assert.match(frame, /Esc/, `width ${width}: Back key remains`);
+		}
+	}],
+	["latest agent response is sanitized, width bounded, and capped at two rows", async () => {
+		const id = "response-layout";
+		const s = state(id);
+		s.clarificationTurns.push({ role: "assistant", content: `\x1b[31m${"LONG_RESPONSE ".repeat(20)}TAIL_SECRET` });
+		const viewed = await interact(register().get("resume_questions"), resume(id), [], awaiting(id, s), 20, 24, plainTheme);
+		const lines = viewed.frames[0].split("\n");
+		assert.ok(lines.every((line) => visibleWidth(line) <= 24));
+		assert.doesNotMatch(viewed.frames[0], /\x1b\[31m|TAIL_SECRET/);
+		const responseStart = lines.findIndex((line) => line.includes("Agent:"));
+		const heading = lines.findIndex((line, index) => index > responseStart && line.includes("Ask agent"));
+		assert.ok(responseStart >= 0 && heading > responseStart);
+		assert.ok(heading - responseStart <= 2, "latest response uses at most two rows");
+	}],
+	["empty and short Compose drafts stay compact at realistic terminal heights", async () => {
+		for (const rows of [20, 30, 40]) {
+			const viewed = await interact(register().get("ask_questions"), { questions }, [CTRL_QUESTION, "short draft"], [], rows, 80, plainTheme);
+			for (const [name, frame] of [["empty", viewed.frames[1]], ["short", viewed.frames[2]]] as const) {
+				const lines = frame.split("\n");
+				const heading = lines.findIndex((line) => line.includes("Ask agent"));
+				assert.ok(heading >= 0, `${rows} rows ${name}: heading remains visible`);
+				const panel = lines.slice(heading);
+				let blanks = 0;
+				let maxBlanks = 0;
+				for (const line of panel) {
+					blanks = line === "" ? blanks + 1 : 0;
+					maxBlanks = Math.max(maxBlanks, blanks);
+				}
+				assert.ok(maxBlanks <= 1, `${rows} rows ${name}: editor has no padded blank block`);
+				assert.ok(panel.length <= 6, `${rows} rows ${name}: one-line editor panel stays compact`);
+				assert.ok(lines.length < rows, `${rows} rows ${name}: compact frame does not manufacture terminal-height whitespace`);
+				assert.ok(frame.includes(CURSOR_MARKER), `${rows} rows ${name}: caret remains visible`);
+				assert.match(frame, /Tab Preview · Enter Send · Esc Back/);
+				assert.match(frame, /Clean later questions may update\./);
+			}
+		}
+	}],
+	["Compose grows for wrapped drafts and viewports a long draft around its caret", async () => {
+		const wrapped = await interact(register().get("ask_questions"), { questions }, [CTRL_QUESTION, "wrapped words ".repeat(12)], [], 30, 40, plainTheme);
+		const wrappedLines = wrapped.frames[2].split("\n");
+		const heading = wrappedLines.findIndex((line) => line.includes("Ask agent"));
+		const borders = wrappedLines.map((line, index) => /^─+$/.test(line) ? index : -1).filter((index) => index > heading);
+		assert.ok(borders.length >= 2 && borders[1]! - borders[0]! > 2, "wrapped draft renders multiple editor body rows");
+
+		const long = await interact(register().get("ask_questions"), { questions }, [CTRL_QUESTION, `PREFIX ${"x".repeat(900)} TAIL`], [], 20, 40, plainTheme);
+		const frame = long.frames[2];
+		assert.ok(frame.includes(CURSOR_MARKER), "long draft keeps the caret in its viewport");
+		assert.match(frame, /TAIL/, "viewport follows the caret to the draft tail");
+		assert.doesNotMatch(frame, /PREFIX/, "off-screen draft head yields to the caret viewport");
+		assert.ok(frame.split("\n").length <= 20, "long draft remains terminal-height bounded");
 	}],
 	["Preview choice paging never mutates the ordinary per-question cursor or window", async () => {
 		const manyChoices = [{ question: "Pick a deployment", options: Array.from({ length: 12 }, (_, index) => ({ label: `OPTION_${index + 1}` })) }];
@@ -142,8 +227,8 @@ const cases: Array<[string, () => Promise<void>]> = [
 		const viewed = await interact(register().get("ask_questions"), { questions: [{ question: "Explain policy" }] }, [TAB, "note text", CTRL_QUESTION, ESC], [], 30, 50);
 		const focusedPanel = viewed.frames[2];
 		const compose = viewed.frames[3];
-		const composePanel = compose.split("\n").slice(0, -1).join("\n");
-		assert.equal(composePanel, focusedPanel.replaceAll(CURSOR_MARKER, ""), "read-only clarification must preserve focused-note presentation");
+		assert.match(compose, /Explain policy|note text/);
+		assert.doesNotMatch(compose, /Note · Tab Back|Tab Add note/);
 		assert.equal(compose.split(CURSOR_MARKER).length - 1, 1, "only clarification retains the trusted hardware caret");
 		assert.match(compose, new RegExp(`${CURSOR_MARKER}\\x1b\\[7m`), "only the clarification caret is painted");
 		assert.equal(viewed.frames[4], focusedPanel, "Escape restores note ownership and its real caret");
@@ -170,13 +255,13 @@ const cases: Array<[string, () => Promise<void>]> = [
 		assert.match(viewed.frames[7], /Q2: Describe retention/);
 		assert.doesNotMatch(viewed.frames[7], /Q1: Choose database|Q3: Choose cache/);
 		assert.doesNotMatch(viewed.frames.slice(4, 10).join("\n"), new RegExp(CURSOR_MARKER), "Preview has no active caret");
-		assert.match(viewed.frames[10], /Clarify| \? /);
-		assert.match(viewed.frames[10], /Q2: Describe retention/, "Compose keeps the last previewed question");
+		assert.match(viewed.frames[10], /Ask agent| Ask /);
+		assert.match(viewed.frames[10], /Q1: Choose database/, "Compose returns to the original question");
 		assert.match(viewed.frames[10], /ab[\s\S]*\x1b\[7mc\x1b\[27m/, "Tab restores the caret before c");
 		assert.equal(viewed.frames[10].split(CURSOR_MARKER).length - 1, 1, "Compose shows only the clarification caret");
 		assert.equal(viewed.result.details.status, "clarification_requested");
 		assert.equal(viewed.result.details.continuation.originQuestionId, viewed.result.details.continuation.questions[0].id);
-		assert.equal(viewed.result.details.continuation.activeQuestionIndex, 1);
+		assert.equal(viewed.result.details.continuation.activeQuestionIndex, 0);
 		assert.equal(viewed.result.details.continuation.clarificationTurns.at(-1).content, "abXc");
 		assert.ok(viewed.result.details.continuation.tabs.every((tab: any) => tab.answer === null));
 	}],
@@ -184,7 +269,8 @@ const cases: Array<[string, () => Promise<void>]> = [
 		const id = "threads";
 		const s = state(id);
 		const viewed = await interact(register().get("resume_questions"), resume(id), [ESC, RIGHT, CTRL_QUESTION, "Second question", "\r"], awaiting(id, s));
-		assert.doesNotMatch(viewed.frames.join("\n"), /You: Why\?|Agent: Because\./, "the shared transcript is payload-only");
+		assert.doesNotMatch(viewed.frames.join("\n"), /You: Why\?/, "prior user requests stay payload-only");
+		assert.match(viewed.frames.join("\n"), /Agent: Because\./, "only the latest assistant response is shown");
 		const next = viewed.result.details.continuation;
 		assert.deepEqual(next.clarificationTurns.map((turn: any) => turn.content), ["Why?", "Because.", "Second question"]);
 		assert.equal(next.originQuestionId, `${id}:q2`);
@@ -214,8 +300,8 @@ const cases: Array<[string, () => Promise<void>]> = [
 		const viewed = await interact(register().get("resume_questions"), resume(id, [{ questionNumber: 2, question: "Revised retention", details: "New policy" }]), ["follow up", "\r"], awaiting(id, s));
 		const next = viewed.result.details.continuation;
 		assert.match(viewed.frames[0], /Q1: Choose database/);
-		assert.doesNotMatch(viewed.frames[0], /Agent: Because\./);
-		assert.match(viewed.frames[0], /Clarify| \? /);
+		assert.match(viewed.frames[0], /Agent: Because\./);
+		assert.match(viewed.frames[0], /Ask agent| Ask /);
 		assert.ok(viewed.frames[0].includes(CURSOR_MARKER));
 		assert.match(viewed.frames[0], /\x1b\[7m \x1b\[27m/);
 		assert.equal(next.questions[1].question, "Revised retention");
@@ -265,7 +351,7 @@ const cases: Array<[string, () => Promise<void>]> = [
 		const viewed = await interact(register().get("ask_questions"), { questions }, ["3", "owner draft", CTRL_QUESTION, TAB, RIGHT, RIGHT, TAB, "clarify", "\r"]);
 		const next = viewed.result.details.continuation;
 		assert.equal(next.originQuestionId, next.questions[0].id);
-		assert.equal(next.activeQuestionIndex, 2);
+		assert.equal(next.activeQuestionIndex, 0);
 		assert.equal(next.editingOtherQuestionId, next.questions[0].id);
 		assert.equal(next.tabs[0].otherText, "owner draft");
 		assert.equal(next.tabs[2].otherText, "");
@@ -300,8 +386,8 @@ const cases: Array<[string, () => Promise<void>]> = [
 			CTRL_QUESTION, TAB, RIGHT, ESC,
 			CTRL_QUESTION, TAB,
 		], [], 14, 38);
-		assert.match(viewed.frames.at(-2)!, /Q2: Describe retention/, "Escape composes the last Preview question");
-		assert.match(viewed.frames.at(-1)!, /Q2: Describe retention/, "fresh Preview starts at the new origin");
+		assert.match(viewed.frames.at(-2)!, /Q1: Choose database/, "Escape returns to the original question");
+		assert.match(viewed.frames.at(-1)!, /Q1: Choose database/, "fresh Preview starts at the unchanged origin");
 		assert.doesNotMatch(viewed.frames.at(-1)!, /Q4: Choose region/);
 	}],
 	["one-question Preview paging reaches every wrapped line without mutating state", async () => {
@@ -363,7 +449,7 @@ const cases: Array<[string, () => Promise<void>]> = [
 		const id = "stale-alias";
 		const viewed = await hostValidatedInteract(tools.get("ask_questions"), resume(id), [ESC, "\r", CTRL_ENTER, "\r"], awaiting(id, state(id)));
 		assert.match(viewed.frames[0], /Q1: Choose database/);
-		assert.match(viewed.frames[0], /Clarify/);
+		assert.match(viewed.frames[0], /Ask agent/);
 		assert.equal(viewed.result.details.continuationId, id);
 		assert.equal(viewed.result.details.revision, 1);
 		assert.equal(viewed.result.details.continuationState, "completed");

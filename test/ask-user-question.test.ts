@@ -1570,11 +1570,11 @@ const semanticFooter = await captureToolRender(
 );
 const initialFooterRaw = semanticFooter[0]!.join("\n");
 assert.match(initialFooterRaw, /\x1b\[35m[^\n]*Enter Select/);
-assert.match(initialFooterRaw, /\x1b\[90m[^\n]*Ctrl\+\? Clarify/);
+assert.match(initialFooterRaw, /\x1b\[90m[^\n]*Ctrl\+\/ Ask agent/);
 assert.match(initialFooterRaw, /\x1b\[90m[^\n]*Esc Cancel/);
 const readyFooterRaw = semanticFooter[1]!.join("\n");
 assert.match(readyFooterRaw, /\x1b\[32m[^\n]*Enter Review/);
-assert.match(readyFooterRaw, /\x1b\[90m[^\n]*Ctrl\+\? Clarify/);
+assert.match(readyFooterRaw, /\x1b\[90m[^\n]*Ctrl\+\/ Ask agent/);
 const reviewFooterRaw = semanticFooter.at(-1)!.join("\n");
 assert.match(reviewFooterRaw, /\x1b\[32m[^\n]*✓ Ready/);
 assert.match(reviewFooterRaw, /\x1b\[32m[^\n]*Enter Submit/);
@@ -1854,7 +1854,7 @@ const rpcResult = await lifecycleAskOne.execute(
 assert.equal(rpcResult.details.status, "unavailable");
 assert.equal(rpcCustomCalled, false);
 
-// Ctrl+? pauses either question UI for an inline clarification without
+// Ctrl+/ opens Ask agent in either question UI without
 // discarding semantic state. Blank submissions stay in place; Esc backs out.
 const CTRL_QUESTION = "\x1b[63;5u";
 const standaloneClarification = await executeCustomUI(
@@ -1862,8 +1862,8 @@ const standaloneClarification = await executeCustomUI(
 	{ question: "Choose runtime", details: "For production", options: [{ label: "Node", value: "node", recommended: true }] },
 	["\r", CTRL_QUESTION, "\r", "\x1b", CTRL_QUESTION, "Why is this best?", "\r"],
 );
-assert.match(plainText(standaloneClarification.snapshots[0]!), /Ctrl\+\? Clarify this question/);
-assert.match(plainText(standaloneClarification.snapshots[2]!), /What do you want to ask the\s+agent\?/);
+assert.match(plainText(standaloneClarification.snapshots[0]!), /Ctrl\+\/ Ask agent/);
+assert.match(plainText(standaloneClarification.snapshots[2]!), /Ask agent/);
 assert.match(plainText(standaloneClarification.snapshots[3]!), /Question required\./);
 assert.match(plainText(standaloneClarification.snapshots[4]!), /Choose runtime/);
 assert.equal(standaloneClarification.result.details.status, "clarification_requested");
@@ -1872,6 +1872,46 @@ assert.match(standaloneClarification.result.content[0].text, /Original question:
 assert.match(standaloneClarification.result.content[0].text, /Details: For production/);
 assert.match(standaloneClarification.result.content[0].text, /Node \[value: node\].*recommended/);
 assert.match(standaloneClarification.result.content[0].text, /normal assistant text.*immediately call ask_user_question again/);
+
+// Standalone Ask agent owns its controls and note affordance in every mode.
+for (const scenario of [
+	{ name: "text", params: { question: "Explain" } },
+	{ name: "single", params: { question: "Choose", options: [{ label: "One" }] } },
+	{ name: "multi", params: { question: "Choose several", options: [{ label: "One" }], multiSelect: true } },
+]) {
+	const frames = await captureToolRender(askOne, scenario.params, {
+		inputs: [CTRL_QUESTION], focused: true, widths: [18, 24, 34], rows: [40, 40, 40],
+	});
+	for (const [index, frame] of frames.slice(1).entries()) {
+		const width = [18, 24, 34][index]!;
+		const text = plainText(frame);
+		assert.ok(frame.every((line) => visibleWidth(line) <= width), `${scenario.name} Ask agent fits width ${width}`);
+		assert.ok(frame.join("\n").includes(CURSOR_MARKER), `${scenario.name} Ask agent keeps its caret at width ${width}`);
+		assert.doesNotMatch(text, /\+ Add note|Tab note|Enter (?:submit|select)|↑↓|Space toggle/, `${scenario.name} hides ordinary actions at width ${width}`);
+		assert.match(text, /Tab|⇥/, `${scenario.name} Preview remains discoverable at width ${width}`);
+		assert.match(text, /Enter|↵/, `${scenario.name} Send remains discoverable at width ${width}`);
+		assert.match(text, /Esc/, `${scenario.name} Back remains discoverable at width ${width}`);
+		assert.doesNotMatch(text, /Clean later questions may update\./);
+	}
+}
+
+for (const scenario of [
+	{ name: "text", params: { question: "Explain" } },
+	{ name: "single", params: { question: "Choose", options: [{ label: "One" }] } },
+	{ name: "multi", params: { question: "Choose several", options: [{ label: "One" }], multiSelect: true } },
+]) {
+	const frames = await captureToolRender(askOne, scenario.params, { inputs: [TAB, "KEEP_NOTE", TAB, CTRL_QUESTION], focused: true });
+	const compose = plainText(frames.at(-1)!);
+	assert.match(compose, /KEEP_NOTE/, `${scenario.name} keeps populated note as read-only context`);
+	assert.doesNotMatch(compose, /\+ Add note|Tab note/, `${scenario.name} does not expose note editing during Ask agent`);
+}
+
+const standalonePreview = await captureToolRender(askOne, { question: "Preview question" }, {
+	inputs: [CTRL_QUESTION, TAB], focused: true, widths: [50],
+});
+const standalonePreviewText = plainText(standalonePreview.at(-1)!);
+assert.match(standalonePreviewText, /Read-only preview · Tab Back · Esc Close/);
+assert.doesNotMatch(standalonePreviewText, /Q1\/1|Clean later questions|←|→|\+ Add note|Tab note/);
 
 // Opening and backing out of clarification must not commit an Other draft that
 // was still being edited. The interaction should match a plain editor Escape.
@@ -1889,8 +1929,8 @@ for (const scenario of [
 		["2", "UNCOMMITTED_OTHER", scenario.key, "\x1b", "\x1b"],
 	);
 	const finalFrame = plainText(backedOut.snapshots.at(-1)!);
-	assert.match(finalFrame, scenario.unselected, `${scenario.name}: Other remains unselected after Ctrl+?/Esc`);
-	assert.doesNotMatch(finalFrame, /— UNCOMMITTED_OTHER/, `${scenario.name}: draft was not committed by Ctrl+?`);
+	assert.match(finalFrame, scenario.unselected, `${scenario.name}: Other remains unselected after Ask agent/Esc`);
+	assert.doesNotMatch(finalFrame, /— UNCOMMITTED_OTHER/, `${scenario.name}: draft was not committed by Ask agent`);
 }
 
 const batchClarification = await executeCustomUI(
@@ -1901,7 +1941,7 @@ const batchClarification = await executeCustomUI(
 	] },
 	["\r", TAB, "Keep durable", TAB, "\r", CTRL_QUESTION, "Can Redis be omitted?", "\r"],
 );
-assert.match(plainText(batchClarification.snapshots[0]!), /Ctrl\+\? Clarify/);
+assert.match(plainText(batchClarification.snapshots[0]!), /Ctrl\+\/ Ask agent/);
 assert.equal(batchClarification.result.details.status, "clarification_requested");
 assert.equal(batchClarification.result.details.activeQuestionIndex, 1);
 assert.equal((batchClarification.result.details.answers[0].answer as any).label, "Postgres");
@@ -1918,7 +1958,7 @@ const answeredBatchClarification = await executeCustomUI(
 	{ questions: [{ question: "Only question", options: [{ label: "Draft choice" }] }] },
 	["\r", CTRL_QUESTION, "Can you explain the tradeoff?", "\r"],
 );
-assert.match(plainText(answeredBatchClarification.snapshots[1]!), /Ctrl\+\? Clarify/);
+assert.match(plainText(answeredBatchClarification.snapshots[1]!), /Ctrl\+\/ Ask agent/);
 assert.equal(answeredBatchClarification.result.details.status, "clarification_requested");
 assert.equal(answeredBatchClarification.result.details.answers[0].answer.label, "Draft choice");
 assert.equal(answeredBatchClarification.result.details.continuation.tabs[0].answer.label, "Draft choice");

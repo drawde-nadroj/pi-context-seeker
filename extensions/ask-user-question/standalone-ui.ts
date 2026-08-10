@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Key, type KeybindingsManager, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import { Key, type KeybindingsManager, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AskAnswer, AskOption, AnswerWithNote, ClarificationRequest } from "./domain.ts";
 import { answerSelectionKey, getOtherLabel, sortAnswers } from "./domain.ts";
 import { addWrapped, constrainFrameHeight, createNoteEditor, createQuestionEditor, isAskAgentKey, isSubmitEnter, normalizeFocusCycleKey, renderOptionalNote, sanitizeDisplayText, sanitizeEditorDisplay, WrappedChoiceList, type WrappedChoiceItem } from "./tui-primitives.ts";
@@ -8,6 +8,19 @@ interface SemanticAction { text: string; color: "muted" | "accent" | "success" |
 
 function actionLine(theme: any, actions: SemanticAction[]): string {
 	return ` ${actions.map((action) => theme.fg(action.color, action.text)).join(theme.fg("muted", " • "))}`;
+}
+
+function widthAwareLabel(width: number, variants: string[]): string {
+	return variants.find((variant) => visibleWidth(variant) <= width) ?? variants.at(-1)!;
+}
+
+function clarificationControls(width: number): string {
+	return widthAwareLabel(width, [
+		" Tab Preview • Enter Send • Esc Back",
+		" Tab View • Enter Send • Esc Back",
+		" Tab • Enter • Esc",
+		" ⇥ • ↵ • Esc",
+	]);
 }
 
 export function customWithAbort<T>(ctx: ExtensionContext, signal: AbortSignal | undefined, factory: (tui: any, theme: any, keybindings: KeybindingsManager, done: (value: T) => void) => any): Promise<T> {
@@ -32,21 +45,33 @@ export function customWithAbort<T>(ctx: ExtensionContext, signal: AbortSignal | 
 function createClarificationEditor(tui: any, theme: any, done: (result: ClarificationRequest) => void, setUnderlyingFocus: (focused: boolean) => void) {
 	const editor = createQuestionEditor(tui, theme);
 	let active = false;
+	let preview = false;
 	let feedback = "";
 	return {
 		get active() { return active; },
-		setFocused(focused: boolean) { editor.focused = focused && active; },
-		open() { active = true; feedback = ""; setUnderlyingFocus(false); editor.focused = true; tui.requestRender(); },
+		setFocused(focused: boolean) { editor.focused = focused && active && !preview; },
+		open() { active = true; preview = false; feedback = ""; setUnderlyingFocus(false); editor.focused = true; tui.requestRender(); },
 		render(width: number) {
 			const lines: string[] = [];
-			addWrapped(lines, theme.fg("text", " What do you want to ask the agent?"), width);
+			if (preview) {
+				const label = widthAwareLabel(width, [
+					" Read-only preview · Tab Back · Esc Close",
+					" Preview · Tab Back · Esc Close",
+					" Preview · Tab · Esc",
+				]);
+				lines.push(truncateToWidth(theme.fg("accent", label), width));
+				return lines;
+			}
+			addWrapped(lines, theme.fg("text", " Ask agent"), width);
 			for (const line of editor.render(Math.max(1, width - 2))) lines.push(truncateToWidth(` ${sanitizeEditorDisplay(line)}`, width));
 			if (feedback) lines.push(truncateToWidth(theme.fg("warning", ` ${feedback}`), width));
-			lines.push(truncateToWidth(theme.fg("dim", " Enter ask • Esc back"), width));
+			lines.push(truncateToWidth(theme.fg("dim", clarificationControls(width)), width));
 			return lines;
 		},
 		handle(data: string) {
-			if (matchesKey(data, Key.escape)) { active = false; editor.focused = false; feedback = ""; setUnderlyingFocus(true); tui.requestRender(); return; }
+			if (matchesKey(data, Key.escape)) { active = false; preview = false; editor.focused = false; feedback = ""; setUnderlyingFocus(true); tui.requestRender(); return; }
+			if (matchesKey(data, Key.tab) || matchesKey(data, Key.shift("tab"))) { preview = !preview; editor.focused = !preview; tui.requestRender(); return; }
+			if (preview) return;
 			if (isSubmitEnter(data)) {
 				const value = editor.getExpandedText().trim();
 				if (!value) { feedback = "Question required."; tui.requestRender(); return; }
@@ -122,14 +147,16 @@ export function askText(
 				const editorPadding = width > 2 ? 1 : 0;
 				const editorIndent = " ".repeat(editorPadding);
 				for (const line of answerEditor.render(Math.max(1, width - editorPadding * 2))) add(`${editorIndent}${theme.fg("accent", sanitizeEditorDisplay(line))}`);
-				if (feedback) add(theme.fg("warning", ` ${feedback}`));
-				lines.push("");
-				renderOptionalNote(lines, width, theme, noteEditor, noteFocused, 2);
-				lines.push("");
+				if (feedback && !clarification.active) add(theme.fg("warning", ` ${feedback}`));
+				if (!clarification.active || noteEditor.getText().trim()) {
+					lines.push("");
+					renderOptionalNote(lines, width, theme, noteEditor, clarification.active ? false : noteFocused, 2);
+					lines.push("");
+				}
 				if (clarification.active) {
 					lines.push(...clarification.render(width));
 				} else {
-					add(actionLine(theme, [{ text: "Ctrl+? Clarify this question", color: "muted" }]));
+					add(actionLine(theme, [{ text: "Ctrl+/ Ask agent", color: "muted" }]));
 					add(actionLine(theme, [
 						{ text: "Enter submit", color: answerEditor.getExpandedText().trim() ? "success" : "accent" },
 						...(["Shift+Enter newline", "Ctrl+C clear", "Tab note", "Esc cancel"].map((text) => ({ text, color: "muted" as const }))),
@@ -279,9 +306,11 @@ export function askSingleChoice(
 				addWrapped(lines, theme.fg("accent", ` ${sanitizeDisplayText(question)}`), width);
 				if (context) { lines.push(""); addWrapped(lines, theme.fg("muted", ` ${sanitizeDisplayText(context)}`), width); }
 				lines.push("");
-				const tail: string[] = feedback ? [theme.fg("warning", ` ${feedback}`), ""] : [""];
-				renderOptionalNote(tail, width, theme, noteEditor, noteFocused, 5);
-				tail.push("");
+				const tail: string[] = clarification.active ? [] : feedback ? [theme.fg("warning", ` ${feedback}`), ""] : [""];
+				if (!clarification.active || noteEditor.getText().trim()) {
+					renderOptionalNote(tail, width, theme, noteEditor, clarification.active ? false : noteFocused, 5);
+					tail.push("");
+				}
 				const hint = noteFocused
 					? actionLine(theme, [
 						{ text: "Note", color: "accent" }, { text: "Tab answer", color: "accent" }, { text: "Esc back", color: "muted" },
@@ -297,7 +326,7 @@ export function askSingleChoice(
 				if (clarification.active) {
 					tail.push(...clarification.render(width));
 				} else {
-					tail.push(truncateToWidth(actionLine(theme, [{ text: "Ctrl+? Clarify this question", color: "muted" }]), width));
+					tail.push(truncateToWidth(actionLine(theme, [{ text: "Ctrl+/ Ask agent", color: "muted" }]), width));
 					tail.push(truncateToWidth(hint, width));
 				}
 				tail.push(truncateToWidth(theme.fg("accent", "─".repeat(width)), width));
@@ -501,9 +530,11 @@ export function askMultiChoice(
 				lines.push("");
 				add(selected.size > 0 ? theme.fg("success", ` ✓ ${selected.size} selected`) : theme.fg("dim", " ○ Select options below"));
 				lines.push("");
-				const tail: string[] = feedback ? [theme.fg("warning", ` ${feedback}`), ""] : [""];
-				renderOptionalNote(tail, width, theme, noteEditor, noteFocused, 9);
-				tail.push("");
+				const tail: string[] = clarification.active ? [] : feedback ? [theme.fg("warning", ` ${feedback}`), ""] : [""];
+				if (!clarification.active || noteEditor.getText().trim()) {
+					renderOptionalNote(tail, width, theme, noteEditor, clarification.active ? false : noteFocused, 9);
+					tail.push("");
+				}
 				const selectedItem = choiceList.selectedItem;
 				const otherSpaceAction = selected.has("other") ? "Space remove" : otherText.trim() ? "Space select" : "Space edit";
 				const primaryHint: SemanticAction[] = selectedItem.isOther
@@ -517,7 +548,7 @@ export function askMultiChoice(
 				if (clarification.active) {
 					tail.push(...clarification.render(width));
 				} else {
-					tail.push(truncateToWidth(actionLine(theme, [{ text: "Ctrl+? Clarify this question", color: "muted" }]), width));
+					tail.push(truncateToWidth(actionLine(theme, [{ text: "Ctrl+/ Ask agent", color: "muted" }]), width));
 					tail.push(truncateToWidth(hint, width));
 				}
 				tail.push(truncateToWidth(theme.fg("accent", "─".repeat(width)), width));
