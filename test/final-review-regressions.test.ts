@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, ProcessTerminal } from "@earendil-works/pi-tui";
-import askUserQuestion from "../extensions/ask-user-question.ts";
+import askUserQuestion from "../extensions/context-seeker.ts";
 import { SafeEditor } from "../extensions/ask-user-question/tui-primitives.ts";
 
 interface Tool {

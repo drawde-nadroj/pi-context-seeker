@@ -693,6 +693,9 @@ export class TabbedQuestions {
 	}
 
 	private renderActionBar(width: number): string[] {
+		type ActionColor = "muted" | "accent" | "success" | "warning";
+		type Action = { text: string; color: ActionColor };
+		const action = (text: string, color: ActionColor = "muted"): Action => ({ text, color });
 		const lines: string[] = [];
 		const indent = width > 1 ? " " : "";
 		const tokenBudget = Math.max(1, width - visibleWidth(indent));
@@ -707,54 +710,55 @@ export class TabbedQuestions {
 			["Tab Add note", ["Tab Note"]],
 			["←→ Questions", ["←→ Qs"]],
 		]);
-		const fitToken = (token: string) => {
-			for (const candidate of [token, ...(compactVariants.get(token) ?? [])]) {
-				if (visibleWidth(candidate) <= tokenBudget) return candidate;
+		const fitAction = (item: Action): Action => {
+			for (const candidate of [item.text, ...(compactVariants.get(item.text) ?? [])]) {
+				if (visibleWidth(candidate) <= tokenBudget) return { ...item, text: candidate };
 			}
-			return truncateLabel(token, tokenBudget);
+			return { ...item, text: truncateLabel(item.text, tokenBudget) };
 		};
-		const row = (tokens: string[], color = "dim") => {
-			let packed = "";
+		const row = (actions: Action[]) => {
+			let packed: Action[] = [];
+			const packedWidth = (items: Action[]) => visibleWidth(items.map((item) => item.text).join(" · "));
 			const flush = () => {
-				if (!packed) return;
-				lines.push(truncateToWidth(this.theme.fg(color, `${indent}${packed}`), width));
-				packed = "";
+				if (packed.length === 0) return;
+				const rendered = packed.map((item) => this.theme.fg(item.color, item.text)).join(this.theme.fg("muted", " · "));
+				lines.push(truncateToWidth(`${indent}${rendered}`, width));
+				packed = [];
 			};
-			for (const rawToken of tokens) {
-				const token = fitToken(rawToken);
-				const candidate = packed ? `${packed} · ${token}` : token;
-				if (packed && visibleWidth(candidate) > tokenBudget) flush();
-				packed = packed ? `${packed} · ${token}` : token;
+			for (const rawAction of actions) {
+				const item = fitAction(rawAction);
+				if (packed.length > 0 && packedWidth([...packed, item]) > tokenBudget) flush();
+				packed.push(item);
 			}
 			flush();
 		};
 
 		if (this.clarificationMode) {
-			row(["Ask agent", "Enter Ask", "Esc Back"], "accent");
+			row([action("Ask agent", "accent"), action("Enter Ask", "accent"), action("Esc Back")]);
 			return lines;
 		}
 		if (this.reviewing) {
-			row(["✓ Ready", "Enter Submit", "↑↓ Scroll", "Esc Back"], "success");
+			row([action("✓ Ready", "success"), action("Enter Submit", "success"), action("↑↓ Scroll"), action("Esc Back")]);
 			return lines;
 		}
-		const clarificationAction = ["Ctrl+? Ask agent"];
+		const clarificationAction = action("Ctrl+? Ask agent");
 		const partialActions = this.canRegenerate()
-			? ["Ctrl+Enter Review answered", "Ctrl+R Regenerate unanswered"]
+			? [action("Ctrl+Enter Review answered", "success"), action("Ctrl+R Regenerate unanswered")]
 			: [];
 		if (this.editMode) {
-			row(["Editing", "Enter Save", "Ctrl+C Clear", ...partialActions, ...clarificationAction, "Esc Back"], "accent");
+			row([action("Editing", "accent"), action("Enter Save", "accent"), action("Ctrl+C Clear"), ...partialActions, clarificationAction, action("Esc Back")]);
 			const minimumLines = width < 24 ? 5 : 2;
 			while (lines.length < minimumLines) lines.push("");
 			return lines;
 		}
 		if (this.noteFocused) {
-			row(["Note", "Tab Back", ...partialActions, ...clarificationAction, "Esc Back"], "accent");
+			row([action("Note", "accent"), action("Tab Back", "accent"), ...partialActions, clarificationAction, action("Esc Back")]);
 			const minimumLines = width < 24 ? 5 : 2;
 			while (lines.length < minimumLines) lines.push("");
 			return lines;
 		}
 		if (this.cancelArmed) {
-			row(["Answers entered", ...clarificationAction, "Esc again to cancel"], "warning");
+			row([action("Answers entered"), clarificationAction, action("Esc again to cancel", "warning")]);
 			return lines;
 		}
 
@@ -763,21 +767,25 @@ export class TabbedQuestions {
 			? undefined
 			: this.getOrCreateChoiceList(this.questions[this.activeTab]).selectedItem;
 		const itemSelected = item ? tab.selected.has(item.id) : false;
-		let primary: string[];
-		if (tab.mode === "text") primary = ["Enter Next"];
+		const ready = this.isAnswered(tab);
+		const advanceLabel = this.activeTab === this.tabs.length - 1 ? "Review" : "Next";
+		let primary: Action[];
+		if (tab.mode === "text") primary = [action(`Enter ${advanceLabel}`, ready ? "success" : "accent")];
 		else if (tab.mode === "single-select") {
-			primary = [item?.isOther && !itemSelected ? "Enter Edit" : itemSelected ? "Enter Next" : "Enter Select"];
-		} else if (item?.isOther) primary = ["Space Toggle", "Enter Edit"];
-		else primary = this.isAnswered(tab) ? ["Space Toggle", "Enter Next"] : ["Space Select"];
+			primary = [action(item?.isOther && !itemSelected ? "Enter Edit" : itemSelected ? `Enter ${advanceLabel}` : "Enter Select", itemSelected ? "success" : "accent")];
+		} else if (item?.isOther) {
+			const spaceAction = itemSelected ? "Space Remove" : tab.otherText.trim() ? "Space Select" : "Space Edit";
+			primary = [action(spaceAction, itemSelected ? "muted" : "accent"), action("Enter Edit", "accent")];
+		} else primary = ready ? [action("Space Toggle"), action(`Enter ${advanceLabel}`, "success")] : [action("Space Select", "accent")];
 
-		row([...primary, ...clarificationAction, "Esc Cancel"], this.isAnswered(tab) ? "success" : "warning");
+		row([...primary, clarificationAction, action("Esc Cancel")]);
 
-		const navigation = [...(tab.mode === "text" ? ["Ctrl+C Clear"] : []), "Tab Add note", "←→ Questions"];
+		const navigation = [...(tab.mode === "text" ? [action("Ctrl+C Clear")] : []), action("Tab Add note"), action("←→ Questions")];
 		const combined = [...partialActions, ...navigation];
-		if (width >= 24 && visibleWidth(combined.join(" · ")) + 1 <= width) row(combined);
+		if (width >= 24 && visibleWidth(combined.map((item) => item.text).join(" · ")) + 1 <= width) row(combined);
 		else {
-			partialActions.forEach((action) => row([action]));
-			if (width < 24) navigation.forEach((action) => row([action]));
+			partialActions.forEach((item) => row([item]));
+			if (width < 24) navigation.forEach((item) => row([item]));
 			else row(navigation);
 		}
 		return lines;
@@ -974,8 +982,8 @@ export class TabbedQuestions {
 			return lines;
 		}
 
-		// Question header
-		addWrapped(lines, th.fg("text", th.bold(`Q${this.activeTab + 1}: ${sanitizeDisplayText(q.question)}`)), width);
+		// Only the original interactive question heading is accent-colored.
+		addWrapped(lines, th.fg("accent", th.bold(`Q${this.activeTab + 1}: ${sanitizeDisplayText(q.question)}`)), width);
 		if (q.details) addWrapped(lines, th.fg("muted", ` ${sanitizeDisplayText(q.details)}`), width);
 		if (!compactHeight) lines.push("");
 
@@ -1017,7 +1025,7 @@ export class TabbedQuestions {
 		const editorPadding = width > 2 ? 1 : 0;
 		const editorIndent = " ".repeat(editorPadding);
 		for (const line of this.editor.render(Math.max(1, width - editorPadding * 2))) {
-			add(`${editorIndent}${sanitizeEditorDisplay(line)}`);
+			add(`${editorIndent}${th.fg("accent", sanitizeEditorDisplay(line))}`);
 		}
 	}
 
@@ -1048,7 +1056,7 @@ export class TabbedQuestions {
 			showRadio: true,
 			availableLines,
 		})) {
-			add(` ${sanitizeEditorDisplay(line)}`);
+			add(` ${line}`);
 		}
 	}
 

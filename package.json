@@ -28,7 +28,7 @@
   ],
   "pi": {
     "extensions": [
-      "./extensions/ask-user-question.ts"
+      "./extensions/context-seeker.ts"
     ]
   },
   "scripts": {

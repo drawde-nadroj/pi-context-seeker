@@ -319,15 +319,16 @@ export class WrappedChoiceList {
 			const visiblySelected = checked || (customActive && !showRadio);
 			// Radios communicate single-select state; checkboxes remain reserved
 			// for actual multi-select semantics.
-			const color = visiblySelected ? "success" : hasCursor ? "accent" : "text";
+			const controlColor = visiblySelected ? "success" : hasCursor ? "accent" : "text";
+			const labelColor = item.option?.recommended ? "success" : controlColor;
 			const cursorPrefix = hasCursor
 				? this.theme.fg(visiblySelected ? "success" : "accent", "→ ")
 				: "  ";
 			const selectionPrefix = showCheckboxes
 				? `${visiblySelected ? "[x]" : "[ ]"} `
 				: showRadio ? `${visiblySelected ? "(●)" : "( )"} ` : "";
-			const prefix = `${cursorPrefix}${this.theme.fg(color, `${selectionPrefix}${item.index}. `)}`;
-			let label = this.theme.fg(color, item.label);
+			const prefix = `${cursorPrefix}${this.theme.fg(controlColor, `${selectionPrefix}${item.index}. `)}`;
+			let label = this.theme.fg(labelColor, item.label);
 			if (item.option?.recommended) label += this.theme.fg("success", "  Recommended");
 
 			if (item.isOther && inlineOtherEditor) {
@@ -339,15 +340,16 @@ export class WrappedChoiceList {
 				const editorWidth = Math.max(1, width - visibleWidth(editorIndent));
 				const editorLines = inlineOtherEditor.render(editorWidth).slice(1, -1);
 				for (const editorLine of editorLines) {
-					lines.push(truncateToWidth(`${editorIndent}${sanitizeEditorDisplay(editorLine)}`, width));
+					lines.push(truncateToWidth(`${editorIndent}${this.theme.fg("accent", sanitizeEditorDisplay(editorLine))}`, width));
 				}
+				lines.push("");
 				continue;
 			}
 
 			if (item.isOther) {
 				const otherAnswer = selectedAnswers?.get("other");
 				if (otherAnswer?.type === "other") {
-					label += this.theme.fg("muted", ` — ${sanitizeDisplayText(otherAnswer.label)}`);
+					label += this.theme.fg("accent", ` — ${sanitizeDisplayText(otherAnswer.label)}`);
 				}
 			}
 
@@ -359,6 +361,7 @@ export class WrappedChoiceList {
 					`${descriptionPrefix}${truncateToWidth(this.theme.fg("muted", item.description ?? ""), descriptionWidth)}`,
 					width,
 				));
+				lines.push("");
 				continue;
 			}
 

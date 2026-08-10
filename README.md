@@ -141,7 +141,7 @@ npm install
 pi install .
 ```
 
-Restart Pi if it is already running. The package manifest explicitly loads only `extensions/ask-user-question.ts`; test modules are not extension entry points.
+Restart Pi if it is already running. The package manifest explicitly loads only `extensions/context-seeker.ts`; test modules are not extension entry points.
 
 ## Tool parameters
 
@@ -270,7 +270,7 @@ npm run pack:check
 
 `npm test` runs the focused interaction and rendering regression tests. `pack:check` prints the files that would be published without creating or publishing a release.
 
-There is intentionally no build script. Pi loads extension `.ts` files directly through jiti, and this package publishes `extensions/ask-user-question.ts` rather than generated JavaScript. Use `npm run typecheck` for compile-time validation and `npm run pack:check` to verify the publish contents.
+There is intentionally no build script. Pi loads extension `.ts` files directly through jiti, and this package publishes `extensions/context-seeker.ts` rather than generated JavaScript. Use `npm run typecheck` for compile-time validation and `npm run pack:check` to verify the publish contents.
 
 ## Contributing
 

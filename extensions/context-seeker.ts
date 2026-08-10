@@ -7,7 +7,7 @@ import {
 	AskQuestionsParams, AskUserQuestionParams, type AskUserQuestionMode, type AskUserQuestionResultDetails,
 	type BatchQuestionResultDetails, type QuestionDef, type TextAnswer,
 	batchCancelledResult, batchUnavailableResult, buildBatchClarificationResult, buildBatchResult, buildClarificationResult, buildRegenerateResult,
-	buildResult, cancelledResult, normalizeOptions, unavailableResult,
+	buildResult, cancelledResult, countRecommendedOptions, normalizeOptions, unavailableResult,
 } from "./ask-user-question/domain.ts";
 
 let uiLock = Promise.resolve();
@@ -44,14 +44,14 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 		description:
 			"Ask the user a single question and pause execution until they answer. Supports choices or a multiline free-form response when options are omitted. Use this when requirements are ambiguous, user preferences are needed, a decision would materially affect implementation, or you need confirmation before proceeding. Ask exactly one question per tool call, and prefer multiple separate tool calls over bundling unrelated questions together.",
 		promptSnippet:
-			"Use this tool to ask exactly one clarifying question, missing-requirement question, preference question, or decision question before continuing.",
+			"Use this tool to ask exactly one clarifying question, missing-requirement question, preference question, or decision question before continuing. Present distinct viable options and mark at most one as recommended.",
 		promptGuidelines: [
 			"Ask exactly one question per tool call.",
 			"If you need answers to multiple questions, make multiple separate ask_user_question tool calls instead of combining them into one prompt.",
-			'Provide options for choice and decision questions. Users can write a custom answer with "Something else…" and add an optional note.',
+			'Provide distinct viable options for choice and decision questions. Users can write a custom answer with "Something else…" and add an optional note.',
 			"Omit options for open-ended questions that ask the user to describe or explain something, or to share an experience; this opens a multiline free-form response.",
 			"Use multiSelect: true only when you provide options and need multiple answers to the same question.",
-			"If you recommend a specific option, make it first and set recommended: true; do not alter its label or value.",
+			"If context supports a recommendation, mark exactly one singular best option with recommended: true; otherwise mark none. Never mark multiple options as recommended.",
 			"Prefer this tool over guessing when requirements, preferences, or implementation choices are unclear.",
 			"Use this tool when multiple valid implementation paths exist and the preferred path depends on user choice.",
 			"If ask_user_question returns clarification_requested, answer the clarification and immediately call ask_user_question again with the original question before continuing work.",
@@ -60,6 +60,9 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			const optionsProvided = params.options !== undefined;
+			if (countRecommendedOptions(params.options) > 1) {
+				throw new Error("ask_user_question allows at most one recommended option. Retry the tool call with one singular best option marked, or none.");
+			}
 			const options = normalizeOptions(params.options);
 			if (optionsProvided && options.length === 0) {
 				throw new Error("ask_user_question requires at least one non-empty option when options are provided");
@@ -160,10 +163,11 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 		description:
 			"Ask the user multiple related questions in a tabbed interface. A single Submit action finalizes completed answers; the user may explicitly skip the rest.",
 		promptSnippet:
-			"Use this tool to ask multiple related questions at once in a tabbed batch interface.",
+			"Use this tool to ask multiple related questions at once in a tabbed batch interface. Present distinct viable options and mark at most one as recommended per question.",
 		promptGuidelines: [
 			"Use ask_questions for 2+ related questions where the answers are needed together. For a single question, use ask_user_question instead.",
-			"Provide options for choice and decision questions; omit options for open-ended prompts that ask the user to describe, explain, or share an experience. Use multiSelect only with options.",
+			"Provide distinct viable options for choice and decision questions; omit options for open-ended prompts that ask the user to describe, explain, or share an experience. Use multiSelect only with options.",
+			"Mark at most one option as recommended per question. When recommending, mark exactly one singular best option based on context; otherwise mark none.",
 			"Add a short label for semantic progress when useful; notes are optional.",
 			"The user reviews completed answers before an explicit Submit and may intentionally skip unanswered questions. Use recommended: true for a recommendation; custom answers remain distinct.",
 			"If the result status is regenerate, use the answered entries and notes as new understanding, do not repeat resolved questions, and immediately call ask_questions again with regenerated unanswered questions only.",
@@ -174,6 +178,9 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			const questions: QuestionDef[] = params.questions.map((q: any, index: number) => {
 				const optionsProvided = q.options !== undefined;
+				if (countRecommendedOptions(q.options) > 1) {
+					throw new Error(`ask_questions question ${index + 1} allows at most one recommended option. Retry the tool call with one singular best option marked, or none.`);
+				}
 				const opts = normalizeOptions(q.options);
 				if (optionsProvided && opts.length === 0) {
 					throw new Error(`ask_questions question ${index + 1} requires at least one non-empty option when options are provided`);

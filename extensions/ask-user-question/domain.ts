@@ -101,7 +101,7 @@ export const OptionSchema = Type.Object({
 	),
 	description: Type.Optional(Type.String({ description: "Optional extra detail shown below the option." })),
 	recommended: Type.Optional(
-		Type.Boolean({ description: "Show a Recommended badge without changing the option label or value." }),
+		Type.Boolean({ description: "Marks this as the singular best option. Set this on at most one option per question; do not change the label or value." }),
 	),
 });
 
@@ -117,7 +117,7 @@ export const AskUserQuestionParams = Type.Object({
 	options: Type.Optional(
 		Type.Array(OptionSchema, {
 			description:
-				"Choices for a decision question. Omit this field for an open-ended prompt that should use a multiline free-form response. When provided, the UI also offers Something else….",
+				"Distinct viable choices for a decision question. Mark at most one option as recommended. Omit this field for an open-ended prompt that should use a multiline free-form response. When provided, the UI also offers Something else….",
 			minItems: 1,
 		}),
 	),
@@ -145,7 +145,7 @@ export const AskQuestionsParams = Type.Object({
 			options: Type.Optional(
 				Type.Array(OptionSchema, {
 					description:
-						"Choices for a decision question. Omit this field for an open-ended prompt that should use a multiline free-form response. When provided, the UI also offers Something else….",
+						"Distinct viable choices for this decision question. Mark at most one option as recommended per question. Omit this field for an open-ended prompt that should use a multiline free-form response. When provided, the UI also offers Something else….",
 					minItems: 1,
 				}),
 			),
@@ -162,8 +162,12 @@ export const AskQuestionsParams = Type.Object({
 	),
 });
 
+export function countRecommendedOptions(options: Array<{ label: string; recommended?: boolean }> | undefined): number {
+	return (options ?? []).filter((option) => option.recommended === true || /\s*\(Recommended\)$/i.test(option.label.trim())).length;
+}
+
 export function normalizeOptions(options: Array<{ label: string; value?: string; description?: string; recommended?: boolean }> | undefined): AskOption[] {
-	return (options || [])
+	const normalized = (options || [])
 		.map((option) => {
 			const rawLabel = option.label.trim();
 			const legacyRecommended = /\s*\(Recommended\)$/i.test(rawLabel);
@@ -176,6 +180,10 @@ export function normalizeOptions(options: Array<{ label: string; value?: string;
 			};
 		})
 		.filter((option) => option.label.length > 0);
+	return [
+		...normalized.filter((option) => option.recommended),
+		...normalized.filter((option) => !option.recommended),
+	];
 }
 
 export function getOtherLabel(options: AskOption[]): string {

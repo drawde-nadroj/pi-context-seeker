@@ -4,6 +4,12 @@ import type { AskAnswer, AskOption, AnswerWithNote, ClarificationRequest } from 
 import { answerSelectionKey, getOtherLabel, sortAnswers } from "./domain.ts";
 import { addWrapped, constrainFrameHeight, createNoteEditor, createQuestionEditor, isAskAgentKey, isSubmitEnter, normalizeFocusCycleKey, renderOptionalNote, sanitizeDisplayText, sanitizeEditorDisplay, WrappedChoiceList, type WrappedChoiceItem } from "./tui-primitives.ts";
 
+interface SemanticAction { text: string; color: "muted" | "accent" | "success" | "warning" }
+
+function actionLine(theme: any, actions: SemanticAction[]): string {
+	return ` ${actions.map((action) => theme.fg(action.color, action.text)).join(theme.fg("muted", " • "))}`;
+}
+
 export function customWithAbort<T>(ctx: ExtensionContext, signal: AbortSignal | undefined, factory: (tui: any, theme: any, keybindings: KeybindingsManager, done: (value: T) => void) => any): Promise<T> {
 	let removeAbort = () => {};
 	return ctx.ui.custom<T>((tui: any, theme: any, keybindings: KeybindingsManager, done) => {
@@ -107,7 +113,7 @@ export function askText(
 				const lines: string[] = [];
 				const add = (text: string) => lines.push(truncateToWidth(text, width));
 				add(theme.fg("accent", "─".repeat(width)));
-				addWrapped(lines, theme.fg("text", ` ${sanitizeDisplayText(question)}`), width);
+				addWrapped(lines, theme.fg("accent", ` ${sanitizeDisplayText(question)}`), width);
 				if (context) {
 					lines.push("");
 					addWrapped(lines, theme.fg("muted", ` ${sanitizeDisplayText(context)}`), width);
@@ -115,7 +121,7 @@ export function askText(
 				lines.push("");
 				const editorPadding = width > 2 ? 1 : 0;
 				const editorIndent = " ".repeat(editorPadding);
-				for (const line of answerEditor.render(Math.max(1, width - editorPadding * 2))) add(`${editorIndent}${sanitizeEditorDisplay(line)}`);
+				for (const line of answerEditor.render(Math.max(1, width - editorPadding * 2))) add(`${editorIndent}${theme.fg("accent", sanitizeEditorDisplay(line))}`);
 				if (feedback) add(theme.fg("warning", ` ${feedback}`));
 				lines.push("");
 				renderOptionalNote(lines, width, theme, noteEditor, noteFocused, 2);
@@ -123,8 +129,11 @@ export function askText(
 				if (clarification.active) {
 					lines.push(...clarification.render(width));
 				} else {
-					add(theme.fg("dim", " Ctrl+? Ask agent"));
-					add(theme.fg("dim", " Enter submit • Shift+Enter newline • Ctrl+C clear • Tab note • Esc cancel"));
+					add(actionLine(theme, [{ text: "Ctrl+? Ask agent", color: "muted" }]));
+					add(actionLine(theme, [
+						{ text: "Enter submit", color: answerEditor.getExpandedText().trim() ? "success" : "accent" },
+						...(["Shift+Enter newline", "Ctrl+C clear", "Tab note", "Esc cancel"].map((text) => ({ text, color: "muted" as const }))),
+					]));
 				}
 				add(theme.fg("accent", "─".repeat(width)));
 				constrainFrameHeight(lines, tui.terminal?.rows, 3);
@@ -267,23 +276,28 @@ export function askSingleChoice(
 				const lines: string[] = [];
 				const add = (text: string) => lines.push(truncateToWidth(text, width));
 				add(theme.fg("accent", "─".repeat(width)));
-				addWrapped(lines, theme.fg("text", ` ${sanitizeDisplayText(question)}`), width);
+				addWrapped(lines, theme.fg("accent", ` ${sanitizeDisplayText(question)}`), width);
 				if (context) { lines.push(""); addWrapped(lines, theme.fg("muted", ` ${sanitizeDisplayText(context)}`), width); }
 				lines.push("");
 				const tail: string[] = feedback ? [theme.fg("warning", ` ${feedback}`), ""] : [""];
 				renderOptionalNote(tail, width, theme, noteEditor, noteFocused, 5);
 				tail.push("");
 				const hint = noteFocused
-					? theme.fg("accent", " Note") + theme.fg("dim", " • Tab answer • Esc back")
+					? actionLine(theme, [
+						{ text: "Note", color: "accent" }, { text: "Tab answer", color: "accent" }, { text: "Esc back", color: "muted" },
+					])
 					: editMode
-						? theme.fg("accent", " Typing") + theme.fg("dim", " • Enter save • Ctrl+C clear • Tab note • Esc back")
-						: stagedAnswer
-							? theme.fg("dim", " ↑↓ navigate • Enter confirm/replace • Esc clear")
-							: theme.fg("dim", " ↑↓ navigate • Enter select • Tab note • Esc cancel");
+						? actionLine(theme, [
+							{ text: "Typing", color: "accent" }, { text: "Enter save", color: "accent" },
+							{ text: "Ctrl+C clear", color: "muted" }, { text: "Tab note", color: "muted" }, { text: "Esc back", color: "muted" },
+						])
+						: actionLine(theme, stagedAnswer
+							? [{ text: "↑↓ navigate", color: "muted" }, { text: "Enter confirm/replace", color: "success" }, { text: "Esc clear", color: "muted" }]
+							: [{ text: "↑↓ navigate", color: "muted" }, { text: "Enter select", color: "accent" }, { text: "Tab note", color: "muted" }, { text: "Esc cancel", color: "muted" }]);
 				if (clarification.active) {
 					tail.push(...clarification.render(width));
 				} else {
-					tail.push(truncateToWidth(theme.fg("dim", " Ctrl+? Ask agent"), width));
+					tail.push(truncateToWidth(actionLine(theme, [{ text: "Ctrl+? Ask agent", color: "muted" }]), width));
 					tail.push(truncateToWidth(hint, width));
 				}
 				tail.push(truncateToWidth(theme.fg("accent", "─".repeat(width)), width));
@@ -482,7 +496,7 @@ export function askMultiChoice(
 				const lines: string[] = [];
 				const add = (text: string) => lines.push(truncateToWidth(text, width));
 				add(theme.fg("accent", "─".repeat(width)));
-				addWrapped(lines, theme.fg("text", ` ${sanitizeDisplayText(question)}`), width);
+				addWrapped(lines, theme.fg("accent", ` ${sanitizeDisplayText(question)}`), width);
 				if (context) { lines.push(""); addWrapped(lines, theme.fg("muted", ` ${sanitizeDisplayText(context)}`), width); }
 				lines.push("");
 				add(selected.size > 0 ? theme.fg("success", ` ✓ ${selected.size} selected`) : theme.fg("dim", " ○ Select options below"));
@@ -490,18 +504,20 @@ export function askMultiChoice(
 				const tail: string[] = feedback ? [theme.fg("warning", ` ${feedback}`), ""] : [""];
 				renderOptionalNote(tail, width, theme, noteEditor, noteFocused, 9);
 				tail.push("");
-				const primaryHint = choiceList.selectedItem.isOther
-					? theme.fg("dim", " Space toggle • Enter edit • Tab note • Esc cancel")
-					: theme.fg("dim", ` Space toggle • Enter ${selected.size > 0 ? "done" : "select"} • Tab note • Esc cancel`);
+				const selectedItem = choiceList.selectedItem;
+				const otherSpaceAction = selected.has("other") ? "Space remove" : otherText.trim() ? "Space select" : "Space edit";
+				const primaryHint: SemanticAction[] = selectedItem.isOther
+					? [{ text: otherSpaceAction, color: selected.has("other") ? "muted" : "accent" }, { text: "Enter edit", color: "accent" }, { text: "Tab note", color: "muted" }, { text: "Esc cancel", color: "muted" }]
+					: [{ text: "Space toggle", color: selected.size > 0 ? "muted" : "accent" }, { text: `Enter ${selected.size > 0 ? "done" : "select"}`, color: selected.size > 0 ? "success" : "accent" }, { text: "Tab note", color: "muted" }, { text: "Esc cancel", color: "muted" }];
 				const hint = noteFocused
-					? theme.fg("accent", " Note") + theme.fg("dim", " • Tab options • Esc back")
+					? actionLine(theme, [{ text: "Note", color: "accent" }, { text: "Tab options", color: "accent" }, { text: "Esc back", color: "muted" }])
 					: editMode
-						? theme.fg("accent", " Typing") + theme.fg("dim", " • Enter save • Ctrl+C clear • Tab note • Esc back")
-						: primaryHint;
+						? actionLine(theme, [{ text: "Typing", color: "accent" }, { text: "Enter save", color: "accent" }, { text: "Ctrl+C clear", color: "muted" }, { text: "Tab note", color: "muted" }, { text: "Esc back", color: "muted" }])
+						: actionLine(theme, primaryHint);
 				if (clarification.active) {
 					tail.push(...clarification.render(width));
 				} else {
-					tail.push(truncateToWidth(theme.fg("dim", " Ctrl+? Ask agent"), width));
+					tail.push(truncateToWidth(actionLine(theme, [{ text: "Ctrl+? Ask agent", color: "muted" }]), width));
 					tail.push(truncateToWidth(hint, width));
 				}
 				tail.push(truncateToWidth(theme.fg("accent", "─".repeat(width)), width));

@@ -3,7 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 // Pi loads every top-level extensions/*.ts file as a factory, so test modules
 // must remain below this non-entry directory.
-import askUserQuestion from "../extensions/ask-user-question.ts";
+import askUserQuestion from "../extensions/context-seeker.ts";
 
 interface RegisteredTool {
 	execute: (
@@ -143,8 +143,17 @@ async function captureToolRender(
 	const widths = scenario.widths ?? [WIDTH];
 	const rowHeights = Array.isArray(scenario.rows) ? scenario.rows : widths.map(() => scenario.rows ?? 80);
 	const style = (code: number, text: string) => `\x1b[${code}m${text}\x1b[0m`;
+	const colorCodes: Record<string, number> = {
+		text: 37,
+		muted: 90,
+		dim: 2,
+		accent: 35,
+		success: 32,
+		warning: 33,
+		borderMuted: 90,
+	};
 	const theme = {
-		fg: (_color: string, text: string) => style(36, text),
+		fg: (color: string, text: string) => style(colorCodes[color] ?? 37, text),
 		bg: (_color: string, text: string) => style(44, text),
 		bold: (text: string) => style(1, text),
 	};
@@ -250,6 +259,41 @@ const askOne = tools.get("ask_user_question");
 const askMany = tools.get("ask_questions");
 assert.ok(askOne, "ask_user_question should be registered");
 assert.ok(askMany, "ask_questions should be registered");
+
+const singleContract = askOne as any;
+const batchContract = askMany as any;
+assert.match(singleContract.promptGuidelines.join("\n"), /distinct viable options/i);
+assert.match(singleContract.promptGuidelines.join("\n"), /exactly one.*recommended/i);
+assert.match(batchContract.promptGuidelines.join("\n"), /distinct viable options/i);
+assert.match(batchContract.promptGuidelines.join("\n"), /at most one.*recommended/i);
+assert.match(JSON.stringify(singleContract.parameters), /at most one[^"}]*recommended/i);
+assert.match(JSON.stringify(batchContract.parameters), /at most one[^"}]*recommended/i);
+
+for (const scenario of [
+	{
+		name: "single",
+		tool: askOne,
+		params: { question: "Invalid recommendations", options: [{ label: "First", recommended: true }, { label: "Second (Recommended)" }] },
+		error: /ask_user_question.*at most one recommended option.*retry/i,
+	},
+	{
+		name: "batch",
+		tool: askMany,
+		params: { questions: [{ question: "Valid", options: [{ label: "Only", recommended: true }] }, { question: "Invalid", options: [{ label: "First", recommended: true }, { label: "Second", recommended: true }] }] },
+		error: /ask_questions question 2.*at most one recommended option.*retry/i,
+	},
+] as const) {
+	let uiOpened = false;
+	await assert.rejects(
+		scenario.tool.execute("multiple-recommendations", scenario.params, undefined, undefined, {
+			hasUI: true,
+			mode: "tui",
+			ui: { custom: async () => { uiOpened = true; return null; } },
+		}),
+		scenario.error,
+	);
+	assert.equal(uiOpened, false, `${scenario.name}: malformed recommendations must be rejected before opening the UI`);
+}
 
 await assert.rejects(
 	askOne.execute(
@@ -817,6 +861,7 @@ const textNavigation = await captureToolRender(
 	{ inputs: ["preserved answer", RIGHT, LEFT], widths: [34], focused: true },
 );
 assert.match(plainText(textNavigation[0]!), /Enter Next[\s\S]*Tab Add note[\s\S]*←→\s+Questions/);
+assert.match(plainText(textNavigation[2]!), /Enter Review/, "the last question advances to Review rather than Next");
 assert.match(plainText(textNavigation[2]!), /Q2: Second choice/);
 assert.match(plainText(textNavigation.at(-1)!), /Q1: First open[\s\S]*preserved answer/);
 
@@ -912,7 +957,14 @@ const customRowHint = await captureToolRender(
 	},
 	{ inputs: [DOWN], widths: [80] },
 );
-assert.match(plainText(customRowHint.at(-1)!), /Space Toggle · Enter Edit/);
+assert.match(plainText(customRowHint.at(-1)!), /Space Edit · Enter Edit/);
+
+const standaloneCustomRowHint = await captureToolRender(
+	askOne,
+	{ question: "Standalone custom hint", options: [{ label: "Preset" }], multiSelect: true },
+	{ inputs: [DOWN], widths: [80] },
+);
+assert.match(plainText(standaloneCustomRowHint.at(-1)!), /Space edit • Enter edit/);
 
 // The active tab and status stay visible when a narrow viewport can show only
 // a small moving window of a larger batch.
@@ -1436,19 +1488,105 @@ for (const scenario of basicScenarios) {
 	assertLongContentIsReadable(snapshots.at(-1)!, WIDTH, scenario.name);
 }
 
-const recommendedFrame = plainText((await captureToolRender(
+const recommendationSnapshots = await captureToolRender(
 	askOne,
 	{
 		question: "Recommended option",
 		options: [
-			{ label: "Modern", value: "modern", recommended: true },
-			{ label: "Legacy (Recommended)" },
+			{ label: "Ordinary first" },
+			{ label: "Modern", value: "modern", recommended: true, description: "Preferred modern path" },
+			{ label: "Ordinary second" },
 		],
 	},
-))[0]!);
+	{ inputs: [DOWN, "\r", DOWN] },
+);
+const recommendedFrame = plainText(recommendationSnapshots[0]!);
+assert.ok(recommendedFrame.indexOf("Modern") < recommendedFrame.indexOf("Ordinary first"));
+assert.ok(recommendedFrame.indexOf("Ordinary first") < recommendedFrame.indexOf("Ordinary second"));
 assert.match(recommendedFrame, /Modern  Recommended/);
-assert.match(recommendedFrame, /Legacy  Recommended/);
-assert.doesNotMatch(recommendedFrame, /Legacy \(Recommended\)/);
+const recommendationRaw = recommendationSnapshots[0]!.join("\n");
+assert.match(recommendationRaw, /\x1b\[35m→ \x1b\[0m\x1b\[35m\( \) 1\. \x1b\[0m\x1b\[32mModern\x1b\[0m\x1b\[32m  Recommended/);
+assert.match(recommendationRaw, /\x1b\[37m\( \) 2\. \x1b\[0m\x1b\[37mOrdinary first/);
+const selectedThenMovedRaw = recommendationSnapshots.at(-1)!.join("\n");
+assert.match(selectedThenMovedRaw, /\x1b\[32m\(●\) 2\. \x1b\[0m\x1b\[32mOrdinary first/);
+assert.match(selectedThenMovedRaw, /\x1b\[35m→ \x1b\[0m\x1b\[35m\( \) 3\. \x1b\[0m\x1b\[35mOrdinary second/);
+
+const describedSpacing = plainText(recommendationSnapshots[0]!).split("\n");
+const descriptionRow = describedSpacing.findIndex((line) => line.includes("Preferred modern path"));
+assert.notEqual(describedSpacing[descriptionRow + 1], "", "ordinary option descriptions do not gain extra spacing");
+const otherDescriptionRow = describedSpacing.findIndex((line) => line.includes("Write your own answer."));
+assert.equal(describedSpacing[otherDescriptionRow + 1], "", "the built-in custom-answer description has one following blank line");
+
+const standaloneHeadingAndText = await captureToolRender(
+	askOne,
+	{ question: "Accent standalone heading" },
+	{ inputs: ["typed standalone answer"], focused: true },
+);
+const standaloneAccentRaw = standaloneHeadingAndText.at(-1)!.join("\n");
+assert.match(standaloneAccentRaw, /\x1b\[35m Accent standalone heading/);
+assert.match(standaloneAccentRaw, /\x1b\[35m[^\n]*typed standalone answer/);
+
+const standaloneSavedCustom = await captureToolRender(
+	askOne,
+	{ question: "Save custom", options: [{ label: "Preset" }] },
+	{ inputs: ["2", "saved custom", "\r"], focused: true },
+);
+const standaloneSavedCustomRaw = standaloneSavedCustom.at(-1)!.join("\n");
+assert.match(standaloneSavedCustomRaw, /\x1b\[35m — saved/);
+assert.match(standaloneSavedCustomRaw, /\x1b\[35mcustom/);
+
+const batchHeadingAndCustom = await captureToolRender(
+	askMany,
+	{ questions: [{ question: "Accent batch heading", options: [{ label: "Preset" }] }] },
+	{ inputs: ["2", "typed custom answer", "\r"], focused: true },
+);
+const batchAccentRaw = batchHeadingAndCustom.at(-1)!.join("\n");
+assert.match(batchAccentRaw, /\x1b\[35m\x1b\[1mQ1: Accent batch heading/);
+assert.match(batchAccentRaw, /\x1b\[35m[^\n]*typed/);
+assert.match(batchAccentRaw, /\x1b\[35mcustom answer/);
+
+const batchOpenText = await captureToolRender(
+	askMany,
+	{ questions: [{ question: "Batch open text" }] },
+	{ inputs: ["typed batch text"], focused: true },
+);
+assert.match(batchOpenText.at(-1)!.join("\n"), /\x1b\[35m[^\n]*typed batch text/);
+
+for (const scenario of [
+	{ name: "standalone open text", tool: askOne, params: { question: "Cursor color" }, prefix: [] },
+	{ name: "standalone custom text", tool: askOne, params: { question: "Cursor color", options: [{ label: "Preset" }] }, prefix: ["2"] },
+	{ name: "batch open text", tool: askMany, params: { questions: [{ question: "Cursor color" }] }, prefix: [] },
+	{ name: "batch custom text", tool: askMany, params: { questions: [{ question: "Cursor color", options: [{ label: "Preset" }] }] }, prefix: ["2"] },
+]) {
+	const frames = await captureToolRender(scenario.tool, scenario.params, {
+		inputs: [...scenario.prefix, "prefix suffix", ...Array.from({ length: 6 }, () => LEFT)],
+		focused: true,
+	});
+	const raw = frames.at(-1)!.join("\n");
+	const suffixIndex = raw.indexOf("suffix");
+	assert.ok(suffixIndex >= 0, `${scenario.name} renders text after the cursor`);
+	assert.ok(raw.lastIndexOf("\x1b[35m", suffixIndex) > raw.lastIndexOf("\x1b[0m", suffixIndex), `${scenario.name} keeps the suffix accent-colored`);
+}
+
+const semanticFooter = await captureToolRender(
+	askMany,
+	{ questions: [{ question: "Footer semantics", options: [{ label: "Ready choice" }] }] },
+	{ inputs: ["\r", "\r"], widths: [80] },
+);
+const initialFooterRaw = semanticFooter[0]!.join("\n");
+assert.match(initialFooterRaw, /\x1b\[35m[^\n]*Enter Select/);
+assert.match(initialFooterRaw, /\x1b\[90m[^\n]*Ctrl\+\? Ask agent/);
+assert.match(initialFooterRaw, /\x1b\[90m[^\n]*Esc Cancel/);
+const readyFooterRaw = semanticFooter[1]!.join("\n");
+assert.match(readyFooterRaw, /\x1b\[32m[^\n]*Enter Review/);
+assert.match(readyFooterRaw, /\x1b\[90m[^\n]*Ctrl\+\? Ask agent/);
+const reviewFooterRaw = semanticFooter.at(-1)!.join("\n");
+assert.match(reviewFooterRaw, /\x1b\[32m[^\n]*✓ Ready/);
+assert.match(reviewFooterRaw, /\x1b\[32m[^\n]*Enter Submit/);
+assert.match(reviewFooterRaw, /\x1b\[90m[^\n]*Esc Back/);
+assert.match(reviewFooterRaw, /\x1b\[90mFooter semantics/);
+assert.doesNotMatch(reviewFooterRaw, /\x1b\[35mFooter semantics/, "review question headings remain muted");
+assert.match(reviewFooterRaw, /\x1b\[35mReady choice/, "review answer summaries retain accent");
 
 const spaceToggleSnapshots = await captureToolRender(
 	askOne,
