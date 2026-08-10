@@ -1872,6 +1872,8 @@ assert.match(standaloneClarification.result.content[0].text, /Original question:
 assert.match(standaloneClarification.result.content[0].text, /Details: For production/);
 assert.match(standaloneClarification.result.content[0].text, /Node \[value: node\].*recommended/);
 assert.match(standaloneClarification.result.content[0].text, /normal assistant text.*immediately call ask_user_question again/);
+const standaloneClarificationTranscript = askOne.renderResult!(standaloneClarification.result, {}, transcriptTheme).render(80).join("\n");
+assert.match(standaloneClarificationTranscript, /Clarification requested[^\n]*\n\s+Why is this best\?/);
 
 // Standalone Ask agent owns its controls and note affordance in every mode.
 for (const scenario of [
@@ -1950,6 +1952,8 @@ assert.equal(batchClarification.result.details.continuation.activeQuestionIndex,
 assert.equal(batchClarification.result.details.continuation.tabs[0].note, "Keep durable");
 assert.match(batchClarification.result.content[0].text, /one atomic resume_questions call/);
 assert.match(batchClarification.result.content[0].text, /revisions: \[\]/);
+const batchClarificationTranscript = askMany.renderResult!(batchClarification.result, {}, transcriptTheme).render(80).join("\n");
+assert.match(batchClarificationTranscript, /Clarification requested[^\n]*\n\s+Can Redis be omitted\?/);
 
 // The current tab remains the question to revisit even if it already has a
 // staged answer; its semantic draft is returned instead of being called resolved.

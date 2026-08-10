@@ -38,6 +38,17 @@ async function withHerdrBlocked<T>(
 	}
 }
 
+function renderClarificationRequested(clarification: string | undefined, theme: any) {
+	const heading = theme.fg("accent", "↪ Clarification requested");
+	const request = clarification?.trim();
+	if (!request) return new Text(heading, 0, 0);
+	const indented = sanitizeDisplayText(request)
+		.split(/\r?\n/)
+		.map((line) => `  ${theme.fg("text", line || " ")}`)
+		.join("\n");
+	return new Text(`${heading}\n${indented}`, 0, 0);
+}
+
 function renderBatchResult(result: any, _options: any, theme: any) {
 	const details = result.details as BatchQuestionResultDetails | undefined;
 	if (!details) {
@@ -54,7 +65,7 @@ function renderBatchResult(result: any, _options: any, theme: any) {
 		return new Text(theme.fg("accent", `↻ Regenerate ${details.unansweredQuestions?.length ?? 0} unanswered`), 0, 0);
 	}
 	if (details.status === "clarification_requested") {
-		return new Text(theme.fg("accent", "↪ Clarification requested"), 0, 0);
+		return renderClarificationRequested(details.clarification, theme);
 	}
 
 	const questionCount = details.questions.length;
@@ -206,7 +217,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 				return new Text(theme.fg("warning", "! Question unavailable"), 0, 0);
 			}
 			if (details.status === "clarification_requested") {
-				return new Text(theme.fg("accent", "↪ Clarification requested"), 0, 0);
+				return renderClarificationRequested(details.clarification, theme);
 			}
 
 			const labels = details.answers.map((answer) => sanitizeDisplayText(answer.label) || "(empty response)");
