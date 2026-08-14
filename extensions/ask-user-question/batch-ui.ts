@@ -681,14 +681,14 @@ export class TabbedQuestions {
 			const index = parseInt(data, 10) - 1;
 			if (index < choiceList.length) {
 				choiceList.setSelectedIndex(index);
-				const item = choiceList.selectedItem;
-				if (item.isOther) {
-					if (tab.selected.has("other")) this.advance();
-					else this.openOtherEditor();
-				} else if (tab.selected.has(item.id)) this.advance();
-				else this.selectOption(tab, item);
+				this.toggleSingleAnswer(tab, choiceList.selectedItem);
 				return;
 			}
+		}
+
+		if (matchesKey(data, Key.space)) {
+			this.toggleSingleAnswer(tab, choiceList.selectedItem);
+			return;
 		}
 
 		const action = choiceList.handleInput(data);
@@ -698,17 +698,41 @@ export class TabbedQuestions {
 			return;
 		}
 		if (action === "confirm") {
-			const item = choiceList.selectedItem;
-			if (item.isOther) {
-				if (tab.selected.has("other")) this.advance();
-				else this.openOtherEditor();
-			} else if (tab.selected.has(item.id)) this.advance();
-			else this.selectOption(tab, item);
+			if (this.isAnswered(tab)) this.advance();
+			else {
+				this.feedback = "Select an answer with Space before continuing.";
+				this.invalidate();
+				this.tui.requestRender();
+			}
 			return;
 		}
-		if (action === "cancel") {
-			this.handleInput(Key.escape);
+		if (action === "cancel") this.handleInput(Key.escape);
+	}
+
+	private toggleSingleAnswer(tab: TabState, item: WrappedChoiceItem): void {
+		this.feedback = "";
+		if (tab.selected.has(item.id)) {
+			this.markQuestionInteracted();
+			tab.answer = null;
+			tab.selected = new Map();
+			this.selected = new Map();
+			this.invalidate();
+			this.tui.requestRender();
+			return;
 		}
+		if (item.isOther) {
+			const customAnswer = tab.otherText.trim();
+			if (!customAnswer) return this.openOtherEditor();
+			this.markQuestionInteracted();
+			const answer: OtherAnswer = { type: "other", label: customAnswer, value: customAnswer };
+			tab.answer = answer;
+			this.selected = new Map([["other", answer]]);
+			tab.selected = new Map(this.selected);
+			this.invalidate();
+			this.tui.requestRender();
+			return;
+		}
+		this.selectOption(tab, item);
 	}
 
 	private selectOption(tab: TabState, item: WrappedChoiceItem): void {
@@ -819,12 +843,12 @@ export class TabbedQuestions {
 		const indent = width > 1 ? " " : "";
 		const tokenBudget = Math.max(1, width - visibleWidth(indent));
 		const compactVariants = new Map<string, string[]>([
+			["Ctrl+Enter Review", ["^Enter Review"]],
 			["Ctrl+Enter Review answered", ["^Enter Review"]],
 			["Ctrl+R Regenerate unanswered", ["Ctrl+R Regenerate"]],
 			["Answers entered", ["Has answers"]],
 			["Esc again to cancel", ["Esc again"]],
-			["Space Toggle", ["Space"]],
-			["Enter Select", ["Enter Pick"]],
+			["Space Change/remove", ["Space Change", "Space"]],
 			["Ctrl+C Clear", ["^C Clear"]],
 			["Tab Add note", ["Tab Note"]],
 			["←→ Questions", ["←→ Qs"]],
@@ -863,9 +887,12 @@ export class TabbedQuestions {
 		const clarificationAction = action(this.clarificationTurns.length > 0
 			? "Ctrl+/ Follow up with agent"
 			: "Ctrl+/ Ask agent");
-		const partialActions = this.canRegenerate()
-			? [action("Ctrl+Enter Review answered", "success"), action("Ctrl+R Regenerate unanswered")]
-			: [];
+		const allAnswered = this.tabs.every((tab) => this.isAnswered(tab));
+		const partialActions = allAnswered
+			? [action("Ctrl+Enter Review", "success")]
+			: this.canRegenerate()
+				? [action("Ctrl+Enter Review answered", "success"), action("Ctrl+R Regenerate unanswered")]
+				: [];
 		const presentationEditing = this.editingOtherQuestionId === this.questions[presentationIndex]?.id;
 		if (presentationEditing) {
 			row([action("Editing", "accent"), action("Enter Save", "accent"), action("Ctrl+C Clear"), ...partialActions, clarificationAction, action("Esc Back")]);
@@ -894,7 +921,11 @@ export class TabbedQuestions {
 		let primary: Action[];
 		if (tab.mode === "text") primary = [action(`Enter ${advanceLabel}`, ready ? "success" : "accent")];
 		else if (tab.mode === "single-select") {
-			primary = [action(item?.isOther && !itemSelected ? "Enter Edit" : itemSelected ? `Enter ${advanceLabel}` : "Enter Select", itemSelected ? "success" : "accent")];
+			const spaceAction = itemSelected
+				? "Space Remove"
+				: item?.isOther && !tab.otherText.trim() ? "Space Edit" : ready ? "Space Change" : "Space Select";
+			primary = [action(spaceAction, itemSelected ? "muted" : "accent")];
+			if (ready) primary.push(action(`Enter ${advanceLabel}`, "success"));
 		} else if (item?.isOther) {
 			const spaceAction = itemSelected ? "Space Remove" : tab.otherText.trim() ? "Space Select" : "Space Edit";
 			primary = [action(spaceAction, itemSelected ? "muted" : "accent"), action("Enter Edit", "accent")];
@@ -941,10 +972,6 @@ export class TabbedQuestions {
 			" Later questions may update.",
 			" Later Qs may update.",
 		]);
-		const latest = [...this.clarificationTurns].reverse().find((turn) => turn.role === "assistant");
-		const response: string[] = [];
-		if (latest) addWrapped(response, this.theme.fg("muted", ` Agent: ${sanitizeDisplayText(latest.content)}`), width);
-
 		const rendered = this.clarificationEditor.render(Math.max(1, width));
 		// For a feasible three-row panel, editor/caret, controls, and adaptive
 		// notice are mandatory. Optional rows may use only space left after the
@@ -954,15 +981,7 @@ export class TabbedQuestions {
 		if (showFeedbackRow) optionalRows--;
 		const showHeading = optionalRows > 0;
 		if (showHeading) optionalRows--;
-		const responseRows = Math.min(2, response.length, optionalRows);
 		const lines: string[] = [];
-		if (responseRows > 0) {
-			const shown = response.slice(0, responseRows).map((line) => truncateToWidth(line, width));
-			if (response.length > responseRows && shown.length) shown[shown.length - 1] = width > 1
-				? `${truncateToWidth(shown.at(-1)!, width - 1)}…`
-				: truncateToWidth("…", width);
-			lines.push(...shown);
-		}
 		if (showFeedbackRow) add(lines, this.theme.fg("warning", ` ${this.feedback}`));
 		if (showHeading) add(lines, this.theme.fg("accent", width < 12 ? " Ask" : " Ask agent"));
 

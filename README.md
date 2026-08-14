@@ -216,16 +216,18 @@ Each option requires a nonblank `label`; `value`, `description`, and `recommende
 
 Controls vary with the active field; the UI shows the available actions.
 
-- **Up/Down**: move through choices or review content
-- **Enter**: select, confirm, save an edited custom answer, advance, or submit as indicated
-- **Space**: select or toggle choices in the batch UI
+- **Up/Down**: move focus through choices without changing the selected answer, or scroll review content
+- **Space** (single-select): select the focused answer, replace the prior selection, or toggle the focused selection off. On an empty **Something else…**, it opens the custom-answer editor
+- **Enter** (single-select): confirm and advance only when an answer is already selected. With no selection, the question stays open and shows guidance
+- **1–9** (choices): focus that numbered answer and apply the same selection action as **Space**; numeric shortcuts never confirm or advance
+- **Enter** (other fields): save an edited custom answer, advance text and multi-select questions, or submit as indicated
 - **Left/Right**: move between batch questions
 - **Tab / Shift+Tab**: move to or from the optional note; in batch mode, cycle question tabs where indicated
 - **Shift+Enter** (Ctrl+J in supported terminals): insert a newline in an editor
 - **Ctrl+Enter / Alt+Enter** (single question): submit a free-form question while editing its note
 - **Ctrl+C**: clear the active answer, custom-answer, or note editor where shown
 - **Escape**: go back, clear/cancel, or require a second press when answers would be discarded
-- **Ctrl+Enter** (batch): review answered questions and mark the rest skipped
+- **Ctrl+Enter** (batch): open Review from any question; when every question is answered, this avoids confirming each one with **Enter**. Otherwise, unanswered questions are marked skipped
 - **Ctrl+R**: regenerate unanswered batch questions when some questions are already resolved
 - **Ctrl+/**: open Ask agent on the current question (Ctrl+? is also accepted); the multiline editor receives focus immediately
 - **Tab / Shift+Tab** (Ask agent): enter a read-only **Preview**, or return to Compose with the draft and insertion point unchanged
@@ -233,7 +235,7 @@ Controls vary with the active field; the UI shows the available actions.
 - **Up / Down, PageUp / PageDown** (batch Preview): move through the normal read-only choice window when needed
 - Standalone Preview supports **Tab / Shift+Tab** to return to Compose and **Escape** to close Ask agent; it has no cross-question navigation
 - **Enter** (Compose only): submit; Preview ignores text and submit keys. **Escape** closes Ask agent in one step and keeps the original question active
-- The batch retains one shared clarification transcript in continuation data and shows only the latest agent response during follow-up. The immutable opening question controls resume position and later-question revision eligibility. Revised clean later questions show **Updated** until you first interact with them.
+- The batch retains one shared clarification transcript in continuation data. Agent answers stay as complete assistant messages in the main chat; the preserved ordinary question form then reopens. The immutable opening question controls resume position and later-question revision eligibility. Revised clean later questions show **Updated** until you first interact with them.
 
 ## Non-TUI behavior
 

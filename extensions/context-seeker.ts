@@ -160,6 +160,17 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 			const mode: AskUserQuestionMode = !optionsProvided
 				? "text"
 				: params.multiSelect ? "multi-select" : "single-select";
+			const latestMatchingResult = (ctx.sessionManager?.getBranch?.() ?? [])
+				.map((entry: any) => entry?.message)
+				.filter((message: any) => message?.role === "toolResult" && message?.toolName === "ask_user_question"
+					&& message?.details?.question === params.question
+					&& message?.details?.context === context
+					&& message?.details?.mode === mode)
+				.at(-1)?.details;
+			const resumedState = latestMatchingResult?.status === "clarification_requested"
+				&& JSON.stringify(latestMatchingResult.options ?? []) === JSON.stringify(options)
+				? latestMatchingResult.continuation
+				: undefined;
 
 			if (signal?.aborted) {
 				return cancelledResult(params.question, mode, context);
@@ -173,23 +184,23 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 				if (signal?.aborted) return cancelledResult(params.question, mode, context);
 				return withHerdrBlocked(pi, "Waiting for your answer", async () => {
 					if (mode === "text") {
-						const result = await askText(ctx, params.question, context, signal);
+						const result = await askText(ctx, params.question, context, signal, resumedState);
 						if (!result) return cancelledResult(params.question, mode, context);
-						if ("action" in result) return buildClarificationResult(params.question, context, mode, options, result.clarification);
+						if ("action" in result) return buildClarificationResult(params.question, context, mode, options, result.clarification, result.continuation);
 						const answer: TextAnswer = { type: "text", label: result.answer, value: result.answer };
 						return buildResult(params.question, context, mode, [answer], result.note);
 					}
 
 					if (mode === "single-select") {
-						const result = await askSingleChoice(ctx, params.question, context, options, signal);
+						const result = await askSingleChoice(ctx, params.question, context, options, signal, resumedState);
 						if (!result) return cancelledResult(params.question, mode, context);
-						if ("action" in result) return buildClarificationResult(params.question, context, mode, options, result.clarification);
+						if ("action" in result) return buildClarificationResult(params.question, context, mode, options, result.clarification, result.continuation);
 						return buildResult(params.question, context, mode, [result.answer], result.note);
 					}
 
-					const result = await askMultiChoice(ctx, params.question, context, options, signal);
+					const result = await askMultiChoice(ctx, params.question, context, options, signal, resumedState);
 					if (!result) return cancelledResult(params.question, mode, context);
-					if ("action" in result) return buildClarificationResult(params.question, context, mode, options, result.clarification);
+					if ("action" in result) return buildClarificationResult(params.question, context, mode, options, result.clarification, result.continuation);
 					return buildResult(params.question, context, mode, result.answer, result.note);
 				});
 			});
@@ -313,7 +324,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 							if (!resumedState!.updatedQuestionIds.includes(question.id!)) resumedState!.updatedQuestionIds.push(question.id!);
 						}
 						resumedState!.activeQuestionIndex = originIndex;
-						resumedState!.clarificationOpen = true;
+						resumedState!.clarificationOpen = false;
 						resumedState!.clarificationTurns.push({ role: "assistant", content: request.response.trim() });
 					}
 				const sourceQuestions = resumedState?.questions ?? questionsParams!;

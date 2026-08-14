@@ -442,7 +442,7 @@ const batchFreeForm = await executeCustomUI(
 			{ question: "Choose a follow-up", label: "Follow-up", options: [{ label: "Continue" }] },
 		],
 	},
-	["First part", "\n", "Second part", "\r", "\r", "\r", "\r"],
+	["First part", "\n", "Second part", "\r", " ", "\r", "\r"],
 );
 assert.equal(batchFreeForm.result.details.questions[0].mode, undefined, "public question definitions omit internal tab mode");
 assert.equal(batchFreeForm.result.details.answers[0].answer, "First part\nSecond part");
@@ -478,14 +478,14 @@ assert.equal(batchPastedFreeForm.result.details.answers[0].answer, largeFreeForm
 const standaloneNote = await executeCustomUI(
 	askOne,
 	{ question: "Choose with a note", options: [{ label: "Native" }] },
-	[TAB, "Keep this inline", CTRL_ENTER],
+	[" ", TAB, "Keep this inline", CTRL_ENTER],
 );
-assert.match(plainText(standaloneNote.snapshots[1]!), /Note \(optional\):/);
-assert.match(plainText(standaloneNote.snapshots[2]!), /Keep this[\s\S]*inline/);
-assert.match(plainText(standaloneNote.snapshots[2]!), /→ \( \) 1\. Native/);
+assert.match(plainText(standaloneNote.snapshots[2]!), /Note \(optional\):/);
+assert.match(plainText(standaloneNote.snapshots[3]!), /Keep this[\s\S]*inline/);
+assert.match(plainText(standaloneNote.snapshots[3]!), /→ \(●\) 1\. Native/);
 assert.match(standaloneNote.result.content[0]!.text, /User selected: 1\. Native\nNote: Keep this inline/);
 assert.equal(standaloneNote.result.details.note, "Keep this inline");
-const singleNoteFrame = plainText(standaloneNote.snapshots[2]!);
+const singleNoteFrame = plainText(standaloneNote.snapshots[3]!);
 const singleNoteLabelLine = singleNoteFrame.split("\n").findIndex((line) => line.includes("Note (optional):"));
 const singleNoteTextLine = singleNoteFrame.split("\n").findIndex((line) => line.includes("Keep this"));
 assert.equal(singleNoteTextLine, singleNoteLabelLine, "note text should begin on its label line");
@@ -497,7 +497,7 @@ assert.match(singleNoteFrame.split("\n").find((line) => line.includes("inline"))
 const multilineNote = await executeCustomUI(
 	askOne,
 	{ question: "Add multiline context", options: [{ label: "Native" }] },
-	[TAB, "first", "\r", " line", "\n", "second", CTRL_ENTER],
+	[" ", TAB, "first", "\r", " line", "\n", "second", CTRL_ENTER],
 );
 assert.equal(multilineNote.result.details.note, "first line\nsecond");
 assert.match(multilineNote.result.content[0]!.text, /Note: first line\nsecond/);
@@ -547,7 +547,7 @@ assert.equal(stagedOptionBeatsCachedOther.result.details.answers[0].label, "Pres
 const emptyOtherAfterNote = await executeCustomUI(
 	askOne,
 	{ question: "Fill Other after note", options: [{ label: "Preset" }] },
-	["2", TAB, "Note first", CTRL_ENTER, "Custom after note", "\r", "\r"],
+	["2", TAB, "Note first", CTRL_ENTER, TAB, " ", "Custom after note", "\r", "\r"],
 );
 assert.equal(emptyOtherAfterNote.result.details.answers[0].label, "Custom after note");
 assert.equal(emptyOtherAfterNote.result.details.note, "Note first");
@@ -580,7 +580,7 @@ assert.match(plainText(noteEscapeSnapshots.at(-1)!), /Note \(optional\):\s+draft
 const batchNote = await executeCustomUI(
 	askMany,
 	{ questions: [{ question: "Batch choice", options: [{ label: "Alpha" }] }] },
-	[TAB, "Batch note", TAB, "\r", "\r", "\r"],
+	[TAB, "Batch note", TAB, " ", "\r", "\r"],
 );
 assert.match(plainText(batchNote.snapshots[1]!), /Note \(optional\):/);
 assert.match(plainText(batchNote.snapshots[3]!), /→ \( \) 1\. Alpha/);
@@ -735,104 +735,187 @@ for (const scenario of [
 	);
 }
 
-// Single-select Enter stages a choice. A second Enter advances. The final
-// confirmed answer opens Review, where Submit is visible but has not happened.
-const readinessFrames = await captureToolRender(
+// Single-select keyboard semantics regression: focus, selection, and
+// confirmation are separate in both standalone and batch question hosts.
+const standaloneSingleSelectKeys = await executeCustomUI(
+	askOne,
+	{ question: "Standalone keyboard semantics", options: [{ label: "Alpha" }, { label: "Beta" }] },
+	[DOWN, " ", "\x1b[A", " ", " ", "\r", "2", " ", "2", "\x1b[A", "\r"],
+);
+assert.match(
+	plainText(standaloneSingleSelectKeys.snapshots[1]!),
+	/  \( \) 1\. Alpha[\s\S]*→ \( \) 2\. Beta/,
+	"Down moves focus without selecting",
+);
+assert.match(
+	plainText(standaloneSingleSelectKeys.snapshots[2]!),
+	/→ \(●\) 2\. Beta/,
+	"Space selects the focused answer",
+);
+assert.match(
+	plainText(standaloneSingleSelectKeys.snapshots[3]!),
+	/→ \( \) 1\. Alpha[\s\S]*  \(●\) 2\. Beta/,
+	"moving focus leaves the selected answer unchanged",
+);
+assert.match(
+	plainText(standaloneSingleSelectKeys.snapshots[4]!),
+	/→ \(●\) 1\. Alpha[\s\S]*  \( \) 2\. Beta/,
+	"Space replaces the prior single selection",
+);
+assert.doesNotMatch(
+	plainText(standaloneSingleSelectKeys.snapshots[5]!),
+	/\(●\)/,
+	"Space toggles the focused selection off",
+);
+assert.match(
+	plainText(standaloneSingleSelectKeys.snapshots[6]!),
+	/Standalone keyboard semantics[\s\S]*(?:Space[^\n]*select|select[^\n]*Space)/i,
+	"Enter without a selection stays on the question and explains that Space selects",
+);
+assert.match(plainText(standaloneSingleSelectKeys.snapshots[7]!), /→ \(●\) 2\. Beta/);
+assert.match(
+	plainText(standaloneSingleSelectKeys.snapshots[8]!),
+	/→ \( \) 2\. Beta/,
+	"a digit applies focus plus Space and can toggle its answer off without submitting",
+);
+assert.match(plainText(standaloneSingleSelectKeys.snapshots[9]!), /→ \(●\) 2\. Beta/);
+assert.match(
+	plainText(standaloneSingleSelectKeys.snapshots[10]!),
+	/→ \( \) 1\. Alpha[\s\S]*  \(●\) 2\. Beta/,
+	"an arrow after digit selection still only moves focus",
+);
+assert.equal(standaloneSingleSelectKeys.submissions.length, 1);
+assert.equal(standaloneSingleSelectKeys.result.details.answers[0].label, "Beta");
+
+const standaloneSpaceCustom = await captureToolRender(
+	askOne,
+	{ question: "Standalone Space custom", options: [{ label: "Preset" }] },
+	{ inputs: [DOWN, " "], widths: [80] },
+);
+assert.match(
+	plainText(standaloneSpaceCustom.at(-1)!),
+	/Something else…[\s\S]*(?:Typing|Editing)/,
+	"Space on an uncached Something else answer opens its editor",
+);
+
+const standaloneDigitCustom = await executeCustomUI(
+	askOne,
+	{ question: "Standalone digit custom", options: [{ label: "Preset" }] },
+	["2", "Standalone custom", "\r", "1", "2", "2", "2", "\x1b[A", "\r"],
+);
+assert.match(
+	plainText(standaloneDigitCustom.snapshots[1]!),
+	/Something else…[\s\S]*(?:Typing|Editing)/,
+	"a digit on an uncached Something else answer opens its editor",
+);
+assert.match(plainText(standaloneDigitCustom.snapshots[3]!), /\(●\) 2\. Something else…[\s\S]*Standalone custom/);
+assert.match(plainText(standaloneDigitCustom.snapshots[4]!), /\(●\) 1\. Preset[\s\S]*\( \) 2\. Something else…/);
+assert.match(plainText(standaloneDigitCustom.snapshots[5]!), /\(●\) 2\. Something else…[\s\S]*Standalone custom/);
+assert.doesNotMatch(plainText(standaloneDigitCustom.snapshots[5]!), /(?:Typing|Editing)[^\n]*Enter/);
+assert.doesNotMatch(plainText(standaloneDigitCustom.snapshots[6]!), /\(●\)/);
+assert.match(plainText(standaloneDigitCustom.snapshots[7]!), /\(●\) 2\. Something else…/);
+assert.match(
+	plainText(standaloneDigitCustom.snapshots[8]!),
+	/→ \( \) 1\. Preset[\s\S]*  \(●\) 2\. Something else…/,
+);
+assert.equal(standaloneDigitCustom.submissions.length, 1, "digits must never submit a standalone answer");
+assert.equal(standaloneDigitCustom.result.details.answers[0].label, "Standalone custom");
+
+const batchSingleSelectKeys = await executeCustomUI(
 	askMany,
 	{
 		questions: [
-			{ question: "First readiness", options: [{ label: "One" }] },
-			{ question: "Second readiness", options: [{ label: "Two" }] },
+			{ question: "Batch keyboard first", options: [{ label: "First A" }, { label: "First B" }] },
+			{ question: "Batch keyboard second", options: [{ label: "Second A" }, { label: "Second B" }] },
 		],
 	},
-	{ inputs: ["\r", "\r", TAB, "context", TAB, "\r", "\r"], widths: [80] },
+	[DOWN, " ", "\x1b[A", "\r", "2", DOWN, "\r", "\r"],
 );
-assert.match(plainText(readinessFrames[0]!), /Enter Select/);
-assert.doesNotMatch(plainText(readinessFrames[0]!), /\d+ (?:unanswered|left)|Regenerate unanswered/);
-assert.match(plainText(readinessFrames[0]!), /Tab Add note[\s\S]*←→ Questions/);
-assert.doesNotMatch(plainText(readinessFrames[0]!), /Ctrl\+Enter|jump to review/i);
-assert.match(plainText(readinessFrames[1]!), /\(●\) 1\. One[\s\S]*Enter Next[\s\S]*Ctrl\+Enter Review answered[\s\S]*Ctrl\+R Regenerate unanswered/);
-assert.match(plainText(readinessFrames[2]!), /Q2: Second readiness[\s\S]*Ctrl\+Enter Review answered[\s\S]*Ctrl\+R Regenerate unanswered/);
-assert.match(plainText(readinessFrames.at(-1)!), /Review your answers[\s\S]*Note: context/);
-assert.match(plainText(readinessFrames.at(-1)!), /Enter Submit/);
+assert.match(plainText(batchSingleSelectKeys.snapshots[1]!), /→ \( \) 2\. First B/);
+assert.match(plainText(batchSingleSelectKeys.snapshots[2]!), /→ \(●\) 2\. First B/);
+assert.match(
+	plainText(batchSingleSelectKeys.snapshots[3]!),
+	/→ \( \) 1\. First A[\s\S]*  \(●\) 2\. First B/,
+);
+assert.match(
+	plainText(batchSingleSelectKeys.snapshots[4]!),
+	/Q2: Batch keyboard second/,
+	"Enter advances with the selected answer even when focus is on another row",
+);
+assert.match(
+	plainText(batchSingleSelectKeys.snapshots[5]!),
+	/Q2: Batch keyboard second[\s\S]*→ \(●\) 2\. Second B/,
+	"a digit selects but does not advance a batch question",
+);
+assert.match(
+	plainText(batchSingleSelectKeys.snapshots[6]!),
+	/  \(●\) 2\. Second B[\s\S]*→ \( \) 3\. Something else…/,
+);
+assert.match(plainText(batchSingleSelectKeys.snapshots[7]!), /Review your answers[\s\S]*Enter Submit/);
+assert.equal(batchSingleSelectKeys.submissions.length, 1);
+assert.deepEqual(
+	batchSingleSelectKeys.result.details.answers.map((answer: any) => answer.answer.label),
+	["First B", "Second B"],
+);
 
-// A one-question batch still requires Review and a second explicit Enter.
-const enterToSubmit = await executeCustomUI(
+const batchEnterWithoutSelection = await captureToolRender(
 	askMany,
-	{ questions: [{ question: "Enter submit", options: [{ label: "Selected answer" }] }] },
-	["\r", "\r", "\r"],
+	{ questions: [{ question: "Batch needs Space", options: [{ label: "Only answer" }] }] },
+	{ inputs: ["\r"], widths: [80] },
 );
-assert.match(plainText(enterToSubmit.snapshots[1]!), /\(●\) 1\. Selected answer/);
-assert.match(plainText(enterToSubmit.snapshots[2]!), /Review your answers[\s\S]*Enter Submit/);
-assert.equal((enterToSubmit.result.details.answers[0].answer as any).label, "Selected answer");
+assert.match(
+	plainText(batchEnterWithoutSelection.at(-1)!),
+	/Batch needs Space[\s\S]*(?:Space[^\n]*select|select[^\n]*Space)/i,
+	"batch Enter without a selection stays and gives useful Space guidance",
+);
+assert.doesNotMatch(plainText(batchEnterWithoutSelection.at(-1)!), /Review your answers/);
 
-// Selection state is independent from cursor position and survives Back.
-const radioState = await captureToolRender(
+// Answering with Space and moving directly between tabs does not require Enter
+// on each question. Once all questions are answered, the action bar exposes a
+// direct Review shortcut from any tab.
+const batchDirectReview = await captureToolRender(
 	askMany,
 	{
 		questions: [
-			{ question: "Choose a radio", options: [{ label: "Chosen" }] },
-			{ question: "Second", options: [{ label: "Next" }] },
+			{ question: "Direct review first", options: [{ label: "First" }] },
+			{ question: "Direct review second", options: [{ label: "Second" }] },
 		],
 	},
-	{ inputs: ["\r", "\r", LEFT, DOWN], widths: [80] },
+	{ inputs: [" ", RIGHT, " ", LEFT, CTRL_ENTER], widths: [80] },
 );
-const radioFrame = plainText(radioState.at(-1)!);
-assert.match(radioFrame, /  \(●\) 1\. Chosen/);
-assert.match(radioFrame, /→ \( \) 2\. Something else…/);
-
-// Standalone single choices stage before they submit. Moving the cursor does
-// not move the radio, and Enter on another row replaces the staged answer.
-const standaloneTwoStep = await executeCustomUI(
-	askOne,
-	{ question: "Two-step choice", options: [{ label: "Alpha" }, { label: "Beta" }] },
-	["\r", DOWN, "\r", "\r"],
+assert.match(
+	plainText(batchDirectReview[4]!),
+	/Q1: Direct review first[\s\S]*Ctrl\+Enter Review/,
+	"all answered questions advertise direct Review after left/right navigation",
 );
-assert.equal(standaloneTwoStep.submissions.length, 1);
-assert.match(plainText(standaloneTwoStep.snapshots[1]!), /→ \(●\) 1\. Alpha/);
-assert.match(plainText(standaloneTwoStep.snapshots[2]!), /  \(●\) 1\. Alpha[\s\S]*→ \( \) 2\. Beta/);
-assert.match(plainText(standaloneTwoStep.snapshots[3]!), /  \( \) 1\. Alpha[\s\S]*→ \(●\) 2\. Beta/);
-assert.equal(standaloneTwoStep.result.details.answers[0].label, "Beta");
-
-const standaloneEscapeClear = await executeCustomUI(
-	askOne,
-	{ question: "Clear a choice", options: [{ label: "Alpha" }] },
-	["1", "\x1b", "1", "1"],
+assert.match(
+	plainText(batchDirectReview.at(-1)!),
+	/Review your answers[\s\S]*Enter Submit/,
+	"Ctrl+Enter opens Review without confirming each answer with Enter",
 );
-assert.match(plainText(standaloneEscapeClear.snapshots[1]!), /\(●\) 1\. Alpha/);
-assert.match(plainText(standaloneEscapeClear.snapshots[2]!), /\( \) 1\. Alpha/);
-assert.equal(standaloneEscapeClear.submissions.length, 1);
 
-const standaloneStagedToCustomEscape = await captureToolRender(
-	askOne,
-	{ question: "Replace staged with custom", options: [{ label: "Alpha" }] },
-	{ inputs: ["1", DOWN, "\r", "retained draft", "\x1b", "\r"], widths: [80] },
-);
-const standaloneStagedToCustomEscapeFrame = plainText(standaloneStagedToCustomEscape.at(-1)!);
-assert.match(standaloneStagedToCustomEscapeFrame, /\( \) 1\. Alpha/);
-assert.doesNotMatch(standaloneStagedToCustomEscapeFrame, /\(●\)/);
-assert.match(standaloneStagedToCustomEscapeFrame, /retained draft/);
-
-const batchStagedToCustomEscape = await captureToolRender(
+const batchDigitCustom = await executeCustomUI(
 	askMany,
-	{ questions: [{ question: "Batch replace staged", options: [{ label: "Alpha" }] }] },
-	{ inputs: ["1", DOWN, "\r", "retained batch draft", "\x1b", "\r"], widths: [80] },
+	{ questions: [{ question: "Batch digit custom", options: [{ label: "Preset" }] }] },
+	["2", "Batch custom", "\r", "\x1b[A", "\r", "\r"],
 );
-const batchStagedToCustomEscapeFrame = plainText(batchStagedToCustomEscape.at(-1)!);
-assert.match(batchStagedToCustomEscapeFrame, /\( \) 1\. Alpha/);
-assert.doesNotMatch(batchStagedToCustomEscapeFrame, /\(●\)/);
-assert.match(batchStagedToCustomEscapeFrame, /retained batch draft/);
-
-const standaloneCustomTwoStep = await executeCustomUI(
-	askOne,
-	{ question: "Custom two-step", options: [{ label: "Preset" }] },
-	["2", "retained draft", "\x1b", "\r", "\r", "\x1b", "\r", "\r", "\r"],
+assert.match(
+	plainText(batchDigitCustom.snapshots[1]!),
+	/Something else…[\s\S]*(?:Typing|Editing)/,
+	"batch digit opens an uncached Something else editor without advancing",
 );
-assert.match(plainText(standaloneCustomTwoStep.snapshots[4]!), /retained draft/);
-assert.match(plainText(standaloneCustomTwoStep.snapshots[5]!), /\(●\) 2\. Something else… —[\s\S]*retained draft/);
-assert.match(plainText(standaloneCustomTwoStep.snapshots[6]!), /\( \) 2\. Something else…/);
-assert.match(plainText(standaloneCustomTwoStep.snapshots[7]!), /retained draft/);
-assert.equal(standaloneCustomTwoStep.result.details.answers[0].label, "retained draft");
+assert.match(plainText(batchDigitCustom.snapshots[3]!), /\(●\) 2\. Something else…[\s\S]*Batch\s+custom/);
+assert.match(
+	plainText(batchDigitCustom.snapshots[4]!),
+	/→ \( \) 1\. Preset[\s\S]*  \(●\) 2\. Something else…/,
+);
+assert.match(
+	plainText(batchDigitCustom.snapshots[5]!),
+	/Review your answers[\s\S]*Batch custom/,
+	"Enter confirms the selected custom answer regardless of focus",
+);
+assert.equal(batchDigitCustom.submissions.length, 1);
+assert.equal(batchDigitCustom.result.details.answers[0].answer.label, "Batch custom");
 
 // Ctrl+C clears active answer editors without closing them. This applies to
 // standalone and batch custom answers and to the shared open-text editor path.
@@ -1089,9 +1172,9 @@ assert.equal(plainText(minimumProgress.at(-2)!).split("\n")[1], "○○");
 const tinyReview = await captureToolRender(
 	askMany,
 	{ questions: [{ question: "Finish", options: [{ label: "Yes" }] }] },
-	{ inputs: ["\r"], widths: [3, 2, 1] },
+	{ inputs: [" ", "\r"], widths: [3, 2, 1] },
 );
-for (const [frame, width] of tinyReview.slice(1).map((frame, index) => [frame, 3 - index] as const)) {
+for (const [frame, width] of tinyReview.slice(2).map((frame, index) => [frame, 3 - index] as const)) {
 	assert.ok(frame.every((line) => visibleWidth(line) <= width), `active Review lines fit width ${width}`);
 	assert.match(plainText(frame).split("\n")[1]!, /^✓/, `active Review keeps its status at width ${width}`);
 }
@@ -1153,7 +1236,7 @@ const constrainedBatchQuestion = await captureToolRender(
 	{ rows: 12, widths: [32] },
 );
 assert.ok(constrainedBatchQuestion[0]!.length <= 12, "batch question chrome and choices fit short terminals");
-assert.match(plainText(constrainedBatchQuestion[0]!), /Enter Sele/);
+assert.match(plainText(constrainedBatchQuestion[0]!), /Space Sele/);
 
 const twentyFourRows = await captureToolRender(
 	askOne,
@@ -1171,7 +1254,7 @@ const reviewViewport = await captureToolRender(
 			options: [{ label: `Answer ${index + 1}` }],
 		})),
 	},
-	{ rows: 12, inputs: [...Array.from({ length: 10 }, () => "\r"), ...Array.from({ length: 30 }, () => DOWN)], widths: [36] },
+	{ rows: 12, inputs: [...Array.from({ length: 5 }, () => [" ", "\r"]).flat(), ...Array.from({ length: 30 }, () => DOWN)], widths: [36] },
 );
 const firstReview = plainText(reviewViewport[10]!);
 assert.match(firstReview, /Review your answers/);
@@ -1183,7 +1266,7 @@ assert.match(plainText(reviewViewport.at(-1)!), /Review item 5|Answer 5/);
 const veryShortReview = await captureToolRender(
 	askMany,
 	{ questions: [{ question: "Tiny review", options: [{ label: "Confirmed" }] }] },
-	{ rows: [6, 7, 8, 9], inputs: ["\r", "\r"], widths: [24, 24, 24, 24] },
+	{ rows: [6, 7, 8, 9], inputs: [" ", "\r"], widths: [24, 24, 24, 24] },
 );
 for (const [index, frame] of veryShortReview.slice(-4).entries()) {
 	const rows = index + 6;
@@ -1285,7 +1368,7 @@ const batchTabNotes = await executeCustomUI(
 			{ question: "Second", options: [{ label: "Two" }] },
 		],
 	},
-	[TAB, "first note", TAB, "\r", "\r", TAB, "second note", TAB, "\r", "\r", "\r"],
+	[TAB, "first note", TAB, " ", "\r", TAB, "second note", TAB, " ", "\r", "\r"],
 );
 assert.equal(batchTabNotes.result.details.answers[0].note, "first note");
 assert.equal(batchTabNotes.result.details.answers[1].note, "second note");
@@ -1315,7 +1398,7 @@ const regenerateParams = {
 		{ question: "Needs regeneration", details: "Original context", options: [{ label: "Beta" }] },
 	],
 };
-const regenerated = await executeCustomUI(regenerateBatch, regenerateParams, ["\r", TAB, "important note", CTRL_R]);
+const regenerated = await executeCustomUI(regenerateBatch, regenerateParams, [" ", TAB, "important note", CTRL_R]);
 assert.equal(regenerated.result.details.status, "regenerate");
 assert.equal(regenerated.result.details.answers.length, 1);
 assert.equal(regenerated.result.details.answers[0].questionIndex, 0);
@@ -1333,7 +1416,7 @@ assert.match(regenerated.result.content[0].text, /Answer mode: single-select \(c
 assert.match(regenerated.result.content[0].text, /Choices:\n- Beta/);
 
 const regenerateActionFrames = await captureToolRender(regenerateBatch, regenerateParams, {
-	inputs: ["\r", TAB, TAB, TAB],
+	inputs: [" ", TAB, TAB, TAB],
 	widths: [80],
 });
 assert.match(plainText(regenerateActionFrames[1]!), /Ctrl\+R Regenerate unanswered/);
@@ -1342,7 +1425,7 @@ assert.ok(regenerateActionFrames.flat().every((line) => visibleWidth(line) <= 80
 
 const responsiveWidths = [80, 50, 34, 20];
 const responsiveActionFrames = await captureToolRender(regenerateBatch, regenerateParams, {
-	inputs: ["\r"],
+	inputs: [" "],
 	widths: responsiveWidths,
 	rows: responsiveWidths.map(() => 40),
 });
@@ -1358,7 +1441,7 @@ for (const [index, width] of responsiveWidths.entries()) {
 }
 
 const shortNarrowAction = await captureToolRender(regenerateBatch, regenerateParams, {
-	inputs: ["\r"],
+	inputs: [" "],
 	widths: [20],
 	rows: 8,
 });
@@ -1375,12 +1458,12 @@ for (const scenario of [
 		name: "normal",
 		params: regenerateParams,
 		inputs: [] as string[],
-		expected: [/Enter Select/, /Tab Add note/, /←→ Questions/],
+		expected: [/Space Select/, /Tab Add note/, /←→ Questions/],
 	},
 	{
 		name: "staged",
 		params: regenerateParams,
-		inputs: ["\r"],
+		inputs: [" "],
 		expected: [/Enter Next/, /Ctrl\+R Regenerate(?: unanswered)?/, /Tab Add note/, /←→ Questions/],
 	},
 	{
@@ -1398,13 +1481,13 @@ for (const scenario of [
 	{
 		name: "detail cancel warning",
 		params: regenerateParams,
-		inputs: ["\r", "\x1b"],
+		inputs: [" ", "\x1b"],
 		expected: [/Answers entered/, /Esc again to cancel/],
 	},
 	{
 		name: "review",
 		params: { questions: [{ question: "Review", options: [{ label: "Ready" }] }] },
-		inputs: ["\r", "\r"],
+		inputs: [" ", "\r"],
 		expected: [/Enter Submit/, /↑↓ Scroll/, /Esc Back/],
 	},
 ]) {
@@ -1429,7 +1512,7 @@ for (const scenario of [
 const regeneratedWithRemainingNote = await executeCustomUI(
 	regenerateBatch,
 	regenerateParams,
-	["\r", "\r", TAB, "regenerate around this", CTRL_R],
+	[" ", "\r", TAB, "regenerate around this", CTRL_R],
 );
 assert.deepEqual(regeneratedWithRemainingNote.result.details.unansweredNotes, [
 	{ questionIndex: 1, note: "regenerate around this" },
@@ -1442,7 +1525,7 @@ assert.match(
 const directCustomRegenerate = await executeCustomUI(
 	regenerateBatch,
 	regenerateParams,
-	[DOWN, "\r", "drafted custom answer", CTRL_R],
+	[DOWN, " ", "drafted custom answer", CTRL_R],
 );
 assert.equal(directCustomRegenerate.result.details.status, "regenerate");
 assert.deepEqual(directCustomRegenerate.result.details.answers[0].answer, {
@@ -1457,11 +1540,11 @@ assert.match(regenerateTranscript, /Regenerate 1 unanswered/);
 const invalidRegenerate = await captureToolRender(regenerateBatch, regenerateParams, { inputs: [CTRL_R] });
 assert.match(plainText(invalidRegenerate.at(-1)!), /Answer a question first\./);
 assert.doesNotMatch(plainText(invalidRegenerate.at(-1)!), /Ctrl\+R Regenerate unanswered/);
-const completeRegenerate = await captureToolRender(regenerateBatch, regenerateParams, { inputs: ["\r", "\r", "\r", "\r", CTRL_R] });
+const completeRegenerate = await captureToolRender(regenerateBatch, regenerateParams, { inputs: [" ", "\r", " ", "\r", CTRL_R] });
 assert.match(plainText(completeRegenerate.at(-1)!), /Review your answers/);
 assert.doesNotMatch(plainText(completeRegenerate.at(-1)!), /Regenerate unanswered|All answered\. Use Review\./);
 const allAnsweredFeedback = await captureToolRender(regenerateBatch, regenerateParams, {
-	inputs: ["\r", "\r", "\r", "\r", "\x1b", CTRL_R],
+	inputs: [" ", "\r", " ", "\r", "\x1b", CTRL_R],
 });
 assert.match(plainText(allAnsweredFeedback.at(-1)!), /All answered\. Use Review\./);
 
@@ -1511,7 +1594,7 @@ const recommendationSnapshots = await captureToolRender(
 			{ label: "Ordinary second" },
 		],
 	},
-	{ inputs: [DOWN, "\r", DOWN] },
+	{ inputs: [DOWN, " ", DOWN] },
 );
 const recommendedFrame = plainText(recommendationSnapshots[0]!);
 assert.ok(recommendedFrame.indexOf("Modern") < recommendedFrame.indexOf("Ordinary first"));
@@ -1584,10 +1667,10 @@ for (const scenario of [
 const semanticFooter = await captureToolRender(
 	askMany,
 	{ questions: [{ question: "Footer semantics", options: [{ label: "Ready choice" }] }] },
-	{ inputs: ["\r", "\r"], widths: [80] },
+	{ inputs: [" ", "\r"], widths: [80] },
 );
 const initialFooterRaw = semanticFooter[0]!.join("\n");
-assert.match(initialFooterRaw, /\x1b\[35m[^\n]*Enter Select/);
+assert.match(initialFooterRaw, /\x1b\[35m[^\n]*Space Select/);
 assert.match(initialFooterRaw, /\x1b\[90m[^\n]*Ctrl\+\/ Ask agent/);
 assert.match(initialFooterRaw, /\x1b\[90m[^\n]*Esc Cancel/);
 const readyFooterRaw = semanticFooter[1]!.join("\n");
@@ -1732,8 +1815,8 @@ const independentDraftSnapshots = await captureToolRender(
 const abandonedFirstDraft = plainText(independentDraftSnapshots[3]!);
 assert.doesNotMatch(abandonedFirstDraft, /—\s+first draft/, "Esc preserves a draft without selecting it");
 const restoredFirstDraft = plainText(independentDraftSnapshots.at(-1)!);
-assert.match(restoredFirstDraft, /first draft/);
-assert.doesNotMatch(restoredFirstDraft, /second draft/);
+assert.match(restoredFirstDraft, /first\s+draft/);
+assert.doesNotMatch(restoredFirstDraft, /second\s+draft/);
 
 // Width-aware caching must reflow existing content when the terminal narrows.
 const resizeSnapshots = await captureToolRender(
@@ -1959,7 +2042,7 @@ const batchClarification = await executeCustomUI(
 		{ question: "Pick database", options: [{ label: "Postgres" }] },
 		{ question: "Pick cache", details: "For sessions", options: [{ label: "Redis" }] },
 	] },
-	["\r", TAB, "Keep durable", TAB, "\r", CTRL_QUESTION, "Can Redis be omitted?", "\r"],
+	[" ", TAB, "Keep durable", TAB, "\r", CTRL_QUESTION, "Can Redis be omitted?", "\r"],
 );
 assert.match(plainText(batchClarification.snapshots[0]!), /Ctrl\+\/ Ask agent/);
 assert.equal(batchClarification.result.details.status, "clarification_requested");
@@ -1978,7 +2061,7 @@ assert.match(batchClarificationTranscript, /Clarification requested[^\n]*\n\s+Ca
 const answeredBatchClarification = await executeCustomUI(
 	askMany,
 	{ questions: [{ question: "Only question", options: [{ label: "Draft choice" }] }] },
-	["\r", CTRL_QUESTION, "Can you explain the tradeoff?", "\r"],
+	[" ", CTRL_QUESTION, "Can you explain the tradeoff?", "\r"],
 );
 assert.match(plainText(answeredBatchClarification.snapshots[1]!), /Ctrl\+\/ Ask agent/);
 assert.equal(answeredBatchClarification.result.details.status, "clarification_requested");

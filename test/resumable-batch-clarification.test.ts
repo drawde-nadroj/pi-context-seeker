@@ -78,6 +78,9 @@ function cleanTabs(qs: any[]) {
 function awaiting(id: string, state: any, revision = 1) {
 	return [{ type: "message", message: { role: "toolResult", toolName: "ask_questions", details: { continuationId: id, revision, continuationState: "awaiting-response", continuation: state } } }];
 }
+function standaloneBranch(result: any) {
+	return [{ type: "message", message: { role: "toolResult", toolName: "ask_user_question", details: result.details } }];
+}
 function state(id: string, origin = 0): any {
 	const qs = canonical(id);
 	return {
@@ -164,18 +167,41 @@ const cases: Array<[string, () => Promise<void>]> = [
 			assert.match(frame, /Esc/, `width ${width}: Back key remains`);
 		}
 	}],
-	["latest agent response is sanitized, width bounded, and capped at two rows", async () => {
+	["standalone clarification reopens the ordinary form with drafts preserved", async () => {
+		const tool = register().get("ask_user_question");
+		const params = { question: "Explain the policy" };
+		const paused = await interact(tool, params, ["draft answer", TAB, "draft note", CTRL_QUESTION, "What does policy mean?", "\r"]);
+		assert.equal(paused.result.details.status, "clarification_requested");
+		const reopened = await interact(tool, params, [], standaloneBranch(paused.result), 30, 60, plainTheme);
+		assert.match(reopened.frames[0], /draft answer/);
+		assert.match(reopened.frames[0], /draft note/);
+		assert.match(reopened.frames[0], /Enter submit|Ctrl\+\/ Ask agent/, "the ordinary standalone form reopens");
+		assert.doesNotMatch(reopened.frames[0], /Ask agent[\s\S]*Enter Send/, "clarification compose stays closed");
+
+		const choiceParams = { question: "Choose policy", options: [{ label: "Preset" }] };
+		const choicePaused = await interact(tool, choiceParams, ["2", "custom draft", CTRL_QUESTION, "Why?", "\r"]);
+		const choiceReopened = await interact(tool, choiceParams, [], standaloneBranch(choicePaused.result), 30, 60, plainTheme);
+		assert.match(choiceReopened.frames[0], /custom draft/);
+		assert.match(choiceReopened.frames[0], /Typing|Enter save/, "custom edit state is restored");
+
+		const fresh = await interact(tool, choiceParams, [], [...standaloneBranch(choicePaused.result), ...standaloneBranch(choiceReopened.result)], 30, 60, plainTheme);
+		assert.doesNotMatch(fresh.frames[0], /custom draft|Typing/, "a terminal retry supersedes the consumed clarification state");
+
+		const multiParams = { question: "Choose safeguards", options: [{ label: "Backups" }], multiSelect: true };
+		const multiPaused = await interact(tool, multiParams, ["1", "2", CTRL_QUESTION, "Why?", "\r"]);
+		const multiReopened = await interact(tool, multiParams, [TAB, CTRL_ENTER], standaloneBranch(multiPaused.result), 30, 60, plainTheme);
+		assert.match(multiReopened.frames.at(-1)!, /Typing|Enter save/, "a pending blank custom answer still blocks submit after resume");
+	}],
+	["assistant clarification stays in chat while the preserved ordinary batch form reopens", async () => {
 		const id = "response-layout";
 		const s = state(id);
-		s.clarificationTurns.push({ role: "assistant", content: `\x1b[31m${"LONG_RESPONSE ".repeat(20)}TAIL_SECRET` });
-		const viewed = await interact(register().get("resume_questions"), resume(id), [], awaiting(id, s), 20, 24, plainTheme);
-		const lines = viewed.frames[0].split("\n");
-		assert.ok(lines.every((line) => visibleWidth(line) <= 24));
-		assert.doesNotMatch(viewed.frames[0], /\x1b\[31m|TAIL_SECRET/);
-		const responseStart = lines.findIndex((line) => line.includes("Agent:"));
-		const heading = lines.findIndex((line, index) => index > responseStart && line.includes("Ask agent"));
-		assert.ok(responseStart >= 0 && heading > responseStart);
-		assert.ok(heading - responseStart <= 2, "latest response uses at most two rows");
+		s.tabs[0].note = "preserved note";
+		const response = `COMPLETE_RESPONSE ${"LONG_RESPONSE ".repeat(20)}TAIL_SECRET`;
+		const viewed = await interact(register().get("resume_questions"), resume(id, [], response), [], awaiting(id, s), 40, 40, plainTheme);
+		assert.match(viewed.frames[0], /preserved note/, "saved form state is restored");
+		assert.match(viewed.frames[0], /Enter Select|Ctrl\+\/ Follow up with agent/, "the ordinary question form reopens");
+		assert.doesNotMatch(viewed.frames[0], /Agent:|COMPLETE_RESPONSE|TAIL_SECRET|Enter Send/, "the assistant message is not duplicated or capped inside the form");
+		assert.equal(viewed.result.details.status, "cancelled");
 	}],
 	["empty and short Compose drafts stay compact at realistic terminal heights", async () => {
 		for (const rows of [20, 30, 40]) {
@@ -268,9 +294,8 @@ const cases: Array<[string, () => Promise<void>]> = [
 	["different origins append one shared transcript and latest submission updates the boundary", async () => {
 		const id = "threads";
 		const s = state(id);
-		const viewed = await interact(register().get("resume_questions"), resume(id), [ESC, RIGHT, CTRL_QUESTION, "Second question", "\r"], awaiting(id, s));
-		assert.doesNotMatch(viewed.frames.join("\n"), /You: Why\?/, "prior user requests stay payload-only");
-		assert.match(viewed.frames.join("\n"), /Agent: Because\./, "only the latest assistant response is shown");
+		const viewed = await interact(register().get("resume_questions"), resume(id), [RIGHT, CTRL_QUESTION, "Second question", "\r"], awaiting(id, s));
+		assert.doesNotMatch(viewed.frames.join("\n"), /You: Why\?|Agent: Because\./, "clarification transcript stays in normal chat and the model payload");
 		const next = viewed.result.details.continuation;
 		assert.deepEqual(next.clarificationTurns.map((turn: any) => turn.content), ["Why?", "Because.", "Second question"]);
 		assert.equal(next.originQuestionId, `${id}:q2`);
@@ -297,13 +322,11 @@ const cases: Array<[string, () => Promise<void>]> = [
 		s.tabs[2].answer = { type: "option", label: "Redis", value: "redis", index: 1 };
 		s.tabs[2].selected = [{ type: "option", label: "Redis", value: "redis", index: 1 }];
 		const old = structuredClone(s);
-		const viewed = await interact(register().get("resume_questions"), resume(id, [{ questionNumber: 2, question: "Revised retention", details: "New policy" }]), ["follow up", "\r"], awaiting(id, s));
+		const viewed = await interact(register().get("resume_questions"), resume(id, [{ questionNumber: 2, question: "Revised retention", details: "New policy" }]), [CTRL_QUESTION, "follow up", "\r"], awaiting(id, s));
 		const next = viewed.result.details.continuation;
 		assert.match(viewed.frames[0], /Q1: Choose database/);
-		assert.match(viewed.frames[0], /Agent: Because\./);
-		assert.match(viewed.frames[0], /Ask agent| Ask /);
-		assert.ok(viewed.frames[0].includes(CURSOR_MARKER));
-		assert.match(viewed.frames[0], /\x1b\[7m \x1b\[27m/);
+		assert.doesNotMatch(viewed.frames[0], /Agent: Because\.|Enter Send/);
+		assert.match(viewed.frames[0], /Follow up with agent/);
 		assert.equal(next.questions[1].question, "Revised retention");
 		assert.equal(next.questions[1].id, old.questions[1].id);
 		assert.deepEqual(next.questions[0], old.questions[0]);
@@ -338,12 +361,12 @@ const cases: Array<[string, () => Promise<void>]> = [
 	}],
 	["Updated persists through navigation and follow-up, then clears only on interaction", async () => {
 		const id = "updated";
-		const first = await interact(register().get("resume_questions"), resume(id, [{ questionNumber: 2, question: "Updated retention" }]), [ESC, RIGHT, LEFT, RIGHT, CTRL_QUESTION, "follow", "\r"], awaiting(id, state(id)));
-		assert.match(first.frames[2], /Updated retention  Updated/);
+		const first = await interact(register().get("resume_questions"), resume(id, [{ questionNumber: 2, question: "Updated retention" }]), [RIGHT, LEFT, RIGHT, CTRL_QUESTION, "follow", "\r"], awaiting(id, state(id)));
+		assert.match(first.frames[1], /Updated retention  Updated/);
 		assert.match(first.frames[4], /Updated retention  Updated/, "navigation does not clear Updated");
 		const next = first.result.details.continuation;
 		assert.ok(next.updatedQuestionIds.includes(`${id}:q2`));
-		const second = await interact(register().get("resume_questions"), resume(id, [], "Follow-up answer", 2), [ESC, "x", ESC, ESC], awaiting(id, next, 2));
+		const second = await interact(register().get("resume_questions"), resume(id, [], "Follow-up answer", 2), ["x", ESC, ESC], awaiting(id, next, 2));
 		assert.match(second.frames[0], /Updated/);
 		assert.doesNotMatch(second.frames[2], /Updated retention  Updated|Q2 Updated/, "typing clears the Updated marker on first interaction");
 	}],
@@ -366,7 +389,7 @@ const cases: Array<[string, () => Promise<void>]> = [
 		s.tabs[1].answer = "draft retention";
 		s.tabs[2].otherText = "custom cache";
 		s.editingOtherQuestionId = s.questions[1].id;
-		const viewed = await interact(register().get("resume_questions"), resume(id), ["again", "\r"], awaiting(id, s));
+		const viewed = await interact(register().get("resume_questions"), resume(id), [CTRL_QUESTION, "again", "\r"], awaiting(id, s));
 		const next = viewed.result.details.continuation;
 		assert.deepEqual(next.tabs, s.tabs);
 		assert.equal(next.editingOtherQuestionId, s.editingOtherQuestionId);
@@ -400,11 +423,11 @@ const cases: Array<[string, () => Promise<void>]> = [
 			tabs: [{ questionIndex: 0, mode: "multi-select", answer: [{ type: "option", label: "OPTION_TWO", value: "OPTION_TWO", index: 2 }, { type: "other", label: "CUSTOM_OMEGA", value: "CUSTOM_OMEGA" }], textBuffer: "", otherText: "CUSTOM_OMEGA", selected: [{ type: "option", label: "OPTION_TWO", value: "OPTION_TWO", index: 2 }, { type: "other", label: "CUSTOM_OMEGA", value: "CUSTOM_OMEGA" }], note: "NOTE_SIGMA" }, { questionIndex: 1, mode: "single-select", answer: null, textBuffer: "", otherText: "", selected: [], note: "SECOND_NOTE" }],
 			activeQuestionIndex: 0, originQuestionId: question.id, clarificationTurns: [{ role: "user", content: "TRANSCRIPT" }], clarificationOpen: true, updatedQuestionIds: [],
 		};
-		const inputs = [TAB, ...Array(3).fill(PAGE_DOWN), ...Array(3).fill(PAGE_UP), RIGHT, LEFT, TAB, "draft", "\r"];
+		const inputs = [CTRL_QUESTION, TAB, ...Array(3).fill(PAGE_DOWN), ...Array(3).fill(PAGE_UP), RIGHT, LEFT, TAB, "draft", "\r"];
 		const viewed = await interact(register().get("resume_questions"), resume(id), inputs, awaiting(id, continuation), 14, 38);
 		for (const frame of viewed.frames.slice(1, -1)) assert.ok(frame.split("\n").length <= 14);
-		assert.match(viewed.frames.slice(1, 8).join("\n"), /OPTION_FIVE/, "read-only paging moves the real choice window");
-		assert.match(viewed.frames[8], /SECOND_QUESTION/, "Preview navigation uses the normal second-question panel");
+		assert.match(viewed.frames.slice(2, 9).join("\n"), /OPTION_FIVE/, "read-only paging moves the real choice window");
+		assert.match(viewed.frames[9], /SECOND_QUESTION/, "Preview navigation uses the normal second-question panel");
 		assert.doesNotMatch(viewed.frames.join("\n"), /TRANSCRIPT/, "transcript is never rendered");
 		const next = viewed.result.details.continuation;
 		assert.equal(next.originQuestionId, question.id);
@@ -447,9 +470,9 @@ const cases: Array<[string, () => Promise<void>]> = [
 	["stale ask_questions alias passes host validation, resumes the UI, and records terminal lifecycle", async () => {
 		const tools = register();
 		const id = "stale-alias";
-		const viewed = await hostValidatedInteract(tools.get("ask_questions"), resume(id), [ESC, "\r", CTRL_ENTER, "\r"], awaiting(id, state(id)));
+		const viewed = await hostValidatedInteract(tools.get("ask_questions"), resume(id), [" ", CTRL_ENTER, "\r"], awaiting(id, state(id)));
 		assert.match(viewed.frames[0], /Q1: Choose database/);
-		assert.match(viewed.frames[0], /Ask agent/);
+		assert.match(viewed.frames[0], /Follow up with agent/);
 		assert.equal(viewed.result.details.continuationId, id);
 		assert.equal(viewed.result.details.revision, 1);
 		assert.equal(viewed.result.details.continuationState, "completed");

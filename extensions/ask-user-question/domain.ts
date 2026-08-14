@@ -105,6 +105,7 @@ export interface AskUserQuestionResultDetails {
 	answers: AskAnswer[];
 	options?: AskOption[];
 	clarification?: string;
+	continuation?: StandaloneContinuation;
 	note?: string;
 	message?: string;
 }
@@ -114,9 +115,20 @@ export interface AnswerWithNote<T> {
 	note: string;
 }
 
+export interface StandaloneContinuation {
+	answerText?: string;
+	otherText?: string;
+	selected?: AskAnswer[];
+	stagedAnswer?: AskAnswer | null;
+	editingOther?: boolean;
+	noteFocused?: boolean;
+	note: string;
+}
+
 export interface ClarificationRequest {
 	action: "clarification";
 	clarification: string;
+	continuation: StandaloneContinuation;
 }
 
 export interface TabState {
@@ -440,6 +452,7 @@ export function buildClarificationResult(
 	mode: AskUserQuestionMode,
 	options: AskOption[],
 	clarification: string,
+	continuation: StandaloneContinuation,
 ) {
 	const semantics = mode === "text" ? "text (free-text answer)" : mode === "multi-select" ? "multi-select (choose one or more choices)" : "single-select (choose one choice)";
 	const lines = [
@@ -452,7 +465,7 @@ export function buildClarificationResult(
 	if (options.length) lines.push("Choices:", ...options.map((option) => `- ${option.label}${option.value !== option.label ? ` [value: ${option.value}]` : ""}${option.description ? ` — ${option.description}` : ""}${option.recommended ? " (recommended)" : ""}`));
 	return {
 		content: [{ type: "text" as const, text: lines.join("\n") }],
-		details: { ...buildStructuredResult("clarification_requested", question, mode, [], context, lines[1]), clarification, options },
+		details: { ...buildStructuredResult("clarification_requested", question, mode, [], context, lines[1]), clarification, options, continuation },
 	};
 }
 

@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key, type KeybindingsManager, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { AskAnswer, AskOption, AnswerWithNote, ClarificationRequest } from "./domain.ts";
+import type { AskAnswer, AskOption, AnswerWithNote, ClarificationRequest, StandaloneContinuation } from "./domain.ts";
 import { answerSelectionKey, getOtherLabel, sortAnswers } from "./domain.ts";
 import { addWrapped, constrainFrameHeight, createNoteEditor, createQuestionEditor, isAskAgentKey, isSubmitEnter, normalizeFocusCycleKey, renderOptionalNote, sanitizeDisplayText, sanitizeEditorDisplay, WrappedChoiceList, type WrappedChoiceItem } from "./tui-primitives.ts";
 
@@ -42,7 +42,7 @@ export function customWithAbort<T>(ctx: ExtensionContext, signal: AbortSignal | 
 	}).finally(removeAbort);
 }
 
-function createClarificationEditor(tui: any, theme: any, done: (result: ClarificationRequest) => void, setUnderlyingFocus: (focused: boolean) => void) {
+function createClarificationEditor(tui: any, theme: any, done: (result: ClarificationRequest) => void, setUnderlyingFocus: (focused: boolean) => void, snapshot: () => StandaloneContinuation) {
 	const editor = createQuestionEditor(tui, theme);
 	let active = false;
 	let preview = false;
@@ -75,7 +75,7 @@ function createClarificationEditor(tui: any, theme: any, done: (result: Clarific
 			if (isSubmitEnter(data)) {
 				const value = editor.getExpandedText().trim();
 				if (!value) { feedback = "Question required."; tui.requestRender(); return; }
-				done({ action: "clarification", clarification: value }); return;
+				done({ action: "clarification", clarification: value, continuation: snapshot() }); return;
 			}
 			editor.handleInput(data); feedback = ""; tui.requestRender();
 		},
@@ -87,20 +87,23 @@ export function askText(
 	question: string,
 	context: string | undefined,
 	signal?: AbortSignal,
+	initialState?: StandaloneContinuation,
 ): Promise<AnswerWithNote<string> | ClarificationRequest | null> {
 	return customWithAbort<AnswerWithNote<string> | ClarificationRequest | null>(ctx, signal, (tui: any, theme: any, _keybindings: KeybindingsManager, done) => {
 		let cachedWidth: number | undefined;
 		let cachedRows: number | undefined;
 		let cachedLines: string[] | undefined;
-		let noteFocused = false;
+		let noteFocused = initialState?.noteFocused ?? false;
 		let feedback = "";
 		let _focused = false;
 		const answerEditor = createQuestionEditor(tui, theme);
 		const noteEditor = createNoteEditor(tui, theme);
+		answerEditor.setText(initialState?.answerText ?? "");
+		noteEditor.setText(initialState?.note ?? "");
 		const clarification = createClarificationEditor(tui, theme, done, (focused) => {
 			answerEditor.focused = focused && _focused && !noteFocused;
 			noteEditor.focused = focused && _focused && noteFocused;
-		});
+		}, () => ({ answerText: answerEditor.getExpandedText(), noteFocused, note: noteEditor.getText() }));
 
 		function invalidate(): void {
 			cachedLines = undefined;
@@ -214,24 +217,27 @@ export function askSingleChoice(
 	context: string | undefined,
 	options: AskOption[],
 	signal?: AbortSignal,
+	initialState?: StandaloneContinuation,
 ): Promise<AnswerWithNote<AskAnswer> | ClarificationRequest | null> {
 	const otherLabel = getOtherLabel(options);
 	return customWithAbort<AnswerWithNote<AskAnswer> | ClarificationRequest | null>(ctx, signal, (tui: any, theme: any, keybindings: KeybindingsManager, done) => {
-		let editMode = false;
-		let noteFocused = false;
+		let editMode = initialState?.editingOther ?? false;
+		let noteFocused = initialState?.noteFocused ?? false;
 		let cachedWidth: number | undefined;
 		let cachedRows: number | undefined;
 		let cachedLines: string[] | undefined;
-		let otherEditorValue = "";
+		let otherEditorValue = initialState?.otherText ?? "";
 		let feedback = "";
-		let stagedAnswer: AskAnswer | null = null;
+		let stagedAnswer: AskAnswer | null = initialState?.stagedAnswer ?? null;
 		let _focused = false;
 		const editor = createQuestionEditor(tui, theme);
 		const noteEditor = createNoteEditor(tui, theme);
+		editor.setText(otherEditorValue);
+		noteEditor.setText(initialState?.note ?? "");
 		const clarification = createClarificationEditor(tui, theme, done, (focused) => {
 			editor.focused = focused && _focused && editMode;
 			noteEditor.focused = focused && _focused && noteFocused;
-		});
+		}, () => ({ otherText: editMode ? editor.getText() : otherEditorValue, stagedAnswer, editingOther: editMode, noteFocused, note: noteEditor.getText() }));
 		const choiceList = new WrappedChoiceList(
 			options,
 			otherLabel,
@@ -239,6 +245,8 @@ export function askSingleChoice(
 			keybindings,
 			theme,
 		);
+		if (stagedAnswer?.type === "option") choiceList.setSelectedIndex(stagedAnswer.index - 1);
+		else if (stagedAnswer?.type === "other") choiceList.selectOther();
 
 		function invalidate(): void { cachedLines = undefined; }
 		function finish(answer: AskAnswer): void { done({ answer, note: noteEditor.getText() }); }
@@ -276,14 +284,24 @@ export function askSingleChoice(
 			const option = item.option!;
 			return { type: "option", label: option.label, value: option.value, index: item.index };
 		}
-		function stageOrConfirm(item: WrappedChoiceItem): void {
+		function toggleFocusedAnswer(): void {
+			const item = choiceList.selectedItem;
+			feedback = "";
 			if (item.isOther) {
-				if (stagedAnswer?.type === "other") return finish(stagedAnswer);
-				return openOtherEditor();
-			}
-			const answer = answerForItem(item);
-			if (stagedAnswer && answerSelectionKey(stagedAnswer) === item.id) return finish(stagedAnswer);
-			stagedAnswer = answer;
+				if (stagedAnswer?.type === "other") stagedAnswer = null;
+				else {
+					const customAnswer = otherEditorValue.trim();
+					if (!customAnswer) return openOtherEditor();
+					stagedAnswer = { type: "other", label: customAnswer, value: customAnswer };
+				}
+			} else if (stagedAnswer && answerSelectionKey(stagedAnswer) === item.id) stagedAnswer = null;
+			else stagedAnswer = answerForItem(item);
+			invalidate();
+			tui.requestRender();
+		}
+		function confirmSelected(): void {
+			if (stagedAnswer) return finish(stagedAnswer);
+			feedback = "Select an answer with Space before confirming.";
 			invalidate();
 			tui.requestRender();
 		}
@@ -328,8 +346,8 @@ export function askSingleChoice(
 							{ text: "Ctrl+C clear", color: "muted" }, { text: "Tab note", color: "muted" }, { text: "Esc back", color: "muted" },
 						])
 						: actionLine(theme, stagedAnswer
-							? [{ text: "↑↓ navigate", color: "muted" }, { text: "Enter confirm/replace", color: "success" }, { text: "Esc clear", color: "muted" }]
-							: [{ text: "↑↓ navigate", color: "muted" }, { text: "Enter select", color: "accent" }, { text: "Tab note", color: "muted" }, { text: "Esc cancel", color: "muted" }]);
+							? [{ text: "↑↓ focus", color: "muted" }, { text: "Space change/remove", color: "accent" }, { text: "Enter confirm", color: "success" }, { text: "Esc clear", color: "muted" }]
+							: [{ text: "↑↓ focus", color: "muted" }, { text: "Space select", color: "accent" }, { text: "Enter needs selection", color: "muted" }, { text: "Tab note", color: "muted" }, { text: "Esc cancel", color: "muted" }]);
 				if (clarification.active) {
 					tail.push(...clarification.render(width));
 				} else {
@@ -359,12 +377,7 @@ export function askSingleChoice(
 				if (isAskAgentKey(data)) { feedback = ""; clarification.open(); invalidate(); return; }
 				data = normalizeFocusCycleKey(data);
 				if (noteFocused) {
-					if (matchesKey(data, Key.ctrl("enter")) || matchesKey(data, Key.alt("enter"))) {
-						const item = choiceList.selectedItem;
-						if (stagedAnswer) return finish(stagedAnswer);
-						if (item.isOther) return openOtherEditor();
-						return finish(answerForItem(item));
-					}
+					if (matchesKey(data, Key.ctrl("enter")) || matchesKey(data, Key.alt("enter"))) return confirmSelected();
 					if (matchesKey(data, Key.escape) || matchesKey(data, Key.tab)) return focusPrimary();
 					if (matchesKey(data, Key.ctrl("c"))) noteEditor.setText("");
 					else noteEditor.handleInput(data);
@@ -383,10 +396,11 @@ export function askSingleChoice(
 					if (matchesKey(data, Key.tab)) return focusNote();
 					if (/^[1-9]$/.test(data)) {
 						const index = parseInt(data, 10) - 1;
-						if (index < choiceList.length) { choiceList.setSelectedIndex(index); return stageOrConfirm(choiceList.selectedItem); }
+						if (index < choiceList.length) { choiceList.setSelectedIndex(index); return toggleFocusedAnswer(); }
 					}
+					if (matchesKey(data, Key.space)) return toggleFocusedAnswer();
 					const action = choiceList.handleInput(data);
-					if (action === "confirm") return stageOrConfirm(choiceList.selectedItem);
+					if (action === "confirm") return confirmSelected();
 					if (action === "cancel") {
 						if (stagedAnswer) {
 							stagedAnswer = null;
@@ -420,24 +434,26 @@ export function askMultiChoice(
 	context: string | undefined,
 	options: AskOption[],
 	signal?: AbortSignal,
+	initialState?: StandaloneContinuation,
 ): Promise<AnswerWithNote<AskAnswer[]> | ClarificationRequest | null> {
 	const otherLabel = getOtherLabel(options);
 	return customWithAbort<AnswerWithNote<AskAnswer[]> | ClarificationRequest | null>(ctx, signal, (tui: any, theme: any, keybindings: KeybindingsManager, done) => {
-		let editMode = false;
-		let noteFocused = false;
+		let editMode = initialState?.editingOther ?? false;
+		let noteFocused = initialState?.noteFocused ?? false;
 		let cachedWidth: number | undefined;
 		let cachedRows: number | undefined;
 		let cachedLines: string[] | undefined;
 		let _focused = false;
-		let otherPending = false;
+		let otherPending = initialState?.editingOther ?? false;
 		let feedback = "";
 		const selected = new Map<string, AskAnswer>();
 		const otherEditor = createQuestionEditor(tui, theme);
 		const noteEditor = createNoteEditor(tui, theme);
+		noteEditor.setText(initialState?.note ?? "");
 		const clarification = createClarificationEditor(tui, theme, done, (focused) => {
 			otherEditor.focused = focused && _focused && editMode;
 			noteEditor.focused = focused && _focused && noteFocused;
-		});
+		}, () => ({ otherText: editMode ? otherEditor.getText() : otherText, selected: Array.from(selected.values()), editingOther: editMode, noteFocused, note: noteEditor.getText() }));
 		const choiceList = new WrappedChoiceList(
 			options,
 			otherLabel,
@@ -445,7 +461,13 @@ export function askMultiChoice(
 			keybindings,
 			theme,
 		);
-		let otherText = "";
+		let otherText = initialState?.otherText ?? "";
+		otherEditor.setText(otherText);
+		if (editMode) choiceList.selectOther();
+		for (const answer of initialState?.selected ?? []) {
+			const key = answerSelectionKey(answer);
+			if (key) selected.set(key, answer);
+		}
 
 		function invalidate(): void { cachedLines = undefined; }
 		function finish(): void {
