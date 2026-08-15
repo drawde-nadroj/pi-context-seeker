@@ -221,13 +221,13 @@ Controls vary with the active field; the UI shows the available actions.
 - **Enter** (single-select): confirm and advance only when an answer is already selected. With no selection, the question stays open and shows guidance
 - **1–9** (choices): focus that numbered answer and apply the same selection action as **Space**; numeric shortcuts never confirm or advance
 - **Enter** (other fields): save an edited custom answer, advance text and multi-select questions, or submit as indicated
-- **Left/Right**: move between batch questions
+- **Left/Right** (batch): with no answers, cycle through questions while Review stays unavailable (`○`). After the first answer is saved, Review joins the cycle after the last question and wraps in both directions. Partial Review is marked `◐`; complete Review remains available and is marked `✓`
 - **Tab / Shift+Tab**: move to or from the optional note; in batch mode, cycle question tabs where indicated
 - **Shift+Enter** (Ctrl+J in supported terminals): insert a newline in an editor
 - **Ctrl+Enter / Alt+Enter** (single question): submit a free-form question while editing its note
 - **Ctrl+C**: clear the active answer, custom-answer, or note editor where shown
 - **Escape**: go back, clear/cancel, or require a second press when answers would be discarded
-- **Ctrl+Enter** (batch): open Review from any question; when every question is answered, this avoids confirming each one with **Enter**. Otherwise, unanswered questions are marked skipped
+- **Ctrl+Enter** (batch): open Review directly from any question once at least one answer exists, without confirming each answer with **Enter**. Partial Review shows every unanswered question as skipped
 - **Ctrl+R**: regenerate unanswered batch questions when some questions are already resolved
 - **Ctrl+/**: open Ask agent on the current question (Ctrl+? is also accepted); the multiline editor receives focus immediately
 - **Tab / Shift+Tab** (Ask agent): enter a read-only **Preview**, or return to Compose with the draft and insertion point unchanged

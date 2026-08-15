@@ -894,6 +894,41 @@ assert.match(
 	"Ctrl+Enter opens Review without confirming each answer with Enter",
 );
 
+// Review joins the Left/Right step cycle as soon as Space has saved one answer.
+// It stays unavailable with no answers, supports partial review in either
+// direction, and remains in the cycle after the remaining answer is completed.
+const emptyArrowReview = await captureToolRender(
+	askMany,
+	{
+		questions: [
+			{ question: "Empty review first", options: [{ label: "First" }] },
+			{ question: "Empty review second", options: [{ label: "Second" }] },
+		],
+	},
+	{ inputs: [LEFT], widths: [80] },
+);
+assert.match(plainText(emptyArrowReview[0]!).split("\n")[1]!, /○ Review/, "empty Review is unavailable");
+assert.match(plainText(emptyArrowReview.at(-1)!), /Q2: Empty review second/, "unavailable Review is excluded from arrow navigation");
+
+const arrowPartialReview = await captureToolRender(
+	askMany,
+	{
+		questions: [
+			{ question: "Arrow review first", options: [{ label: "First answer" }] },
+			{ question: "Arrow review second", options: [{ label: "Second answer" }] },
+		],
+	},
+	{ inputs: [" ", RIGHT, RIGHT, RIGHT, LEFT, LEFT, " ", RIGHT], widths: [80] },
+);
+assert.match(plainText(arrowPartialReview[1]!).split("\n")[1]!, /◐ Review/, "one answer makes Review partially available");
+assert.match(plainText(arrowPartialReview[1]!), /←→ Questions\/Review/, "arrow hint includes available Review");
+assert.match(plainText(arrowPartialReview[3]!), /Review 1 answer · 1 skipped[\s\S]*First answer[\s\S]*\(skipped\)/);
+assert.match(plainText(arrowPartialReview[4]!), /Q1: Arrow review first/, "Right from Review wraps to Q1");
+assert.match(plainText(arrowPartialReview[5]!), /Review 1 answer · 1 skipped/, "Left from Q1 wraps to Review");
+assert.match(plainText(arrowPartialReview[6]!), /Q2: Arrow review second/, "Left from Review returns to the last question");
+assert.match(plainText(arrowPartialReview.at(-1)!), /Review your answers[\s\S]*First answer[\s\S]*Second answer/);
+assert.match(plainText(arrowPartialReview.at(-1)!).split("\n")[1]!, /✓ Review/, "complete Review remains available");
+
 const batchDigitCustom = await executeCustomUI(
 	askMany,
 	{ questions: [{ question: "Batch digit custom", options: [{ label: "Preset" }] }] },

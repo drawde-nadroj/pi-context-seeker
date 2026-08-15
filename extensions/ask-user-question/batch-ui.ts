@@ -379,6 +379,24 @@ export class TabbedQuestions {
 		return tab.answer !== null && (!Array.isArray(tab.answer) || tab.answer.length > 0);
 	}
 
+	private answeredCount(): number {
+		return this.tabs.filter((tab) => this.isAnswered(tab)).length;
+	}
+
+	private reviewAvailable(): boolean {
+		return this.answeredCount() > 0;
+	}
+
+	private navigateSteps(direction: -1 | 1): void {
+		if (!this.reviewAvailable()) {
+			this.selectTab((this.activeTab + direction + this.tabs.length) % this.tabs.length);
+			return;
+		}
+		const target = this.activeTab + direction;
+		if (target < 0 || target === this.tabs.length) this.openReview(true);
+		else this.selectTab(target);
+	}
+
 	private advance(): void {
 		if (this.activeTab < this.tabs.length - 1) this.selectTab(this.activeTab + 1);
 		else this.openReview();
@@ -519,6 +537,14 @@ export class TabbedQuestions {
 		}
 		data = normalizeFocusCycleKey(data);
 		if (this.reviewing) {
+			if (matchesKey(data, Key.left)) {
+				this.selectTab(this.tabs.length - 1);
+				return;
+			}
+			if (matchesKey(data, Key.right)) {
+				this.selectTab(0);
+				return;
+			}
 			if (this.keybindings.matches(data, "tui.select.up")) {
 				this.reviewScroll = Math.max(0, this.reviewScroll - 1);
 				this.invalidate();
@@ -532,7 +558,7 @@ export class TabbedQuestions {
 				return;
 			}
 			if (matchesKey(data, Key.enter)) return this.submitAll();
-			if (matchesKey(data, Key.escape) || matchesKey(data, Key.left) || data.toLowerCase() === "b") {
+			if (matchesKey(data, Key.escape) || data.toLowerCase() === "b") {
 				const firstSkipped = this.tabs.findIndex((tab) => !this.isAnswered(tab));
 				this.selectTab(this.partialReview && firstSkipped >= 0 ? firstSkipped : this.tabs.length - 1);
 				return;
@@ -626,13 +652,13 @@ export class TabbedQuestions {
 			return;
 		}
 
-		// Left/Right arrows to switch tabs
+		// Left/Right move through questions and, once an answer exists, Review.
 		if (matchesKey(data, Key.left)) {
-			this.selectTab((this.activeTab - 1 + this.tabs.length) % this.tabs.length);
+			this.navigateSteps(-1);
 			return;
 		}
 		if (matchesKey(data, Key.right)) {
-			this.selectTab((this.activeTab + 1) % this.tabs.length);
+			this.navigateSteps(1);
 			return;
 		}
 
@@ -852,6 +878,7 @@ export class TabbedQuestions {
 			["Ctrl+C Clear", ["^C Clear"]],
 			["Tab Add note", ["Tab Note"]],
 			["←→ Questions", ["←→ Qs"]],
+			["←→ Questions/Review", ["←→ Qs/Review", "←→ Steps"]],
 			["PgUp/PgDn Context", ["Pg Context"]],
 			["↑↓/PgUp/PgDn Scroll", ["↑↓/Pg Scroll", "Pg Scroll"]],
 			["←/→ Questions", ["←→ Questions", "←→ Qs"]],
@@ -881,7 +908,7 @@ export class TabbedQuestions {
 		};
 
 		if (this.reviewing) {
-			row([action("✓ Ready", "success"), action("Enter Submit", "success"), action("↑↓ Scroll"), action("Esc Back")]);
+			row([action(this.partialReview ? "◐ Partial" : "✓ Ready", this.partialReview ? "accent" : "success"), action("Enter Submit", "success"), action("←→ Qs"), action("↑↓ Scroll"), action("Esc Back")]);
 			return lines;
 		}
 		const clarificationAction = action(this.clarificationTurns.length > 0
@@ -933,7 +960,7 @@ export class TabbedQuestions {
 
 		row([...primary, clarificationAction, action("Esc Cancel")]);
 
-		const navigation = [...(tab.mode === "text" ? [action("Ctrl+C Clear")] : []), action("Tab Add note"), action("←→ Questions")];
+		const navigation = [...(tab.mode === "text" ? [action("Ctrl+C Clear")] : []), action("Tab Add note"), action(this.reviewAvailable() ? "←→ Questions/Review" : "←→ Questions")];
 		const combined = [...partialActions, ...navigation];
 		if (width >= 24 && visibleWidth(combined.map((item) => item.text).join(" · ")) + 1 <= width) row(combined);
 		else {
@@ -1073,14 +1100,15 @@ export class TabbedQuestions {
 		const reviewStep = this.tabs.length;
 		const stepCount = reviewStep + 1;
 		const activeStep = this.reviewing ? reviewStep : presentationIndex;
-		const answered = (index: number) => index === reviewStep
-			? this.reviewing || this.tabs.every((candidate) => this.isAnswered(candidate))
-			: this.isAnswered(this.tabs[index]);
+		const answeredCount = this.answeredCount();
+		const status = (index: number) => index === reviewStep
+			? answeredCount === 0 ? "○" : answeredCount === this.tabs.length ? "✓" : "◐"
+			: this.isAnswered(this.tabs[index]) ? "✓" : "○";
 		const hasNote = (index: number) => index < reviewStep && this.tabs[index].note.trim().length > 0;
 		const stepLabel = (index: number) => index === reviewStep
 			? "Review"
 			: `${sanitizeProgressLabel(this.questions[index].label || `Q${index + 1}`)}${this.updatedQuestionIds.has(this.questions[index].id!) ? " Updated" : ""}`;
-		const plainFullToken = (index: number) => ` ${answered(index) ? "✓" : "○"} ${stepLabel(index)}${hasNote(index) ? " •" : ""} `;
+		const plainFullToken = (index: number) => ` ${status(index)} ${stepLabel(index)}${hasNote(index) ? " •" : ""} `;
 		const fullWidth = Array.from({ length: stepCount }, (_, index) => visibleWidth(plainFullToken(index)))
 			.reduce((total, tokenWidth) => total + tokenWidth, stepCount - 1);
 		let compact = fullWidth > width;
@@ -1097,13 +1125,13 @@ export class TabbedQuestions {
 		let showReviewStatus = true;
 		let extremeSeparator = "";
 		const plainCompactToken = (index: number, activeLabel?: string) => {
-			const status = answered(index) ? "✓" : "○";
+			const stepStatus = status(index);
 			if (index === activeStep) {
 				const label = activeLabel ?? stepLabel(index);
-				return `${status}${label ? ` ${label}` : ""}${hasNote(index) && !extreme ? " •" : ""}`;
+				return `${stepStatus}${label ? ` ${label}` : ""}${hasNote(index) && !extreme ? " •" : ""}`;
 			}
-			if (index === reviewStep) return extreme ? `${showReviewStatus ? status : ""}${reviewLabel}` : `${status} Review`;
-			return `${status}${index + 1}${hasNote(index) ? "•" : ""}`;
+			if (index === reviewStep) return extreme ? `${showReviewStatus ? stepStatus : ""}${reviewLabel}` : `${stepStatus} Review`;
+			return `${stepStatus}${index + 1}${hasNote(index) ? "•" : ""}`;
 		};
 		const plainBar = (steps: Set<number>, activeLabel?: string, showWindows = true) => {
 			const indices = [...steps].sort((a, b) => a - b);
@@ -1160,20 +1188,20 @@ export class TabbedQuestions {
 			if (compact && showWindows && position > 0 && index > indices[position - 1] + 1) {
 				tabBarParts.push(th.fg("dim", "›"));
 			}
-			const status = answered(index) ? "✓" : "○";
+			const stepStatus = status(index);
 			const noteMark = hasNote(index) && !extreme ? (compact && index !== activeStep ? "•" : " •") : "";
 			const token = compact
 				? index === activeStep
-					? `${status}${activeLabel ? ` ${activeLabel}` : ""}${noteMark}`
+					? `${stepStatus}${activeLabel ? ` ${activeLabel}` : ""}${noteMark}`
 					: index === reviewStep
-						? extreme ? `${showReviewStatus ? status : ""}${reviewLabel}` : `${status} Review`
-						: `${status}${index + 1}${noteMark}`
+						? extreme ? `${showReviewStatus ? stepStatus : ""}${reviewLabel}` : `${stepStatus} Review`
+						: `${stepStatus}${index + 1}${noteMark}`
 				: plainFullToken(index);
-			const styledStatus = answered(index) ? th.fg("success", status) : th.fg("dim", status);
-			const styledToken = token.replace(status, styledStatus);
+			const statusColor = stepStatus === "✓" ? "success" : stepStatus === "◐" ? "accent" : "dim";
+			const styledStatus = th.fg(statusColor, stepStatus);
+			const styledToken = token.replace(stepStatus, styledStatus);
 			if (index === activeStep) tabBarParts.push(th.bg("selectedBg", th.fg("accent", th.bold(styledToken))));
-			else if (answered(index)) tabBarParts.push(th.fg("success", styledToken));
-			else tabBarParts.push(th.fg("dim", styledToken));
+			else tabBarParts.push(th.fg(statusColor, styledToken));
 		}
 		const separator = extreme ? extremeSeparator : " ";
 		const tabBar = tabBarParts.join(th.fg("borderMuted", separator));
