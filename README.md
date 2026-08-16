@@ -218,6 +218,7 @@ Controls vary with the active field; the UI shows the available actions.
 
 - **Up/Down**: move focus through choices without changing the selected answer, or scroll review content
 - **Space** (single-select): select the focused answer, replace the prior selection, or toggle the focused selection off. On an empty **Something else…**, it opens the custom-answer editor
+- **E** (single-select): while **Something else…** is focused, open its editor. Saved text is preserved and editing resumes at the end, whether the custom answer is selected or cached after being toggled off
 - **Enter** (single-select): confirm and advance only when an answer is already selected. With no selection, the question stays open and shows guidance
 - **1–9** (choices): focus that numbered answer and apply the same selection action as **Space**; numeric shortcuts never confirm or advance
 - **Enter** (other fields): save an edited custom answer, advance text and multi-select questions, or submit as indicated

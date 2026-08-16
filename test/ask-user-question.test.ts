@@ -34,6 +34,7 @@ const NARROW_WIDTH = 20;
 const LABEL_END_MARKER = "LABEL_END";
 const DESCRIPTION_END_MARKER = "DESCRIPTION_END";
 const DOWN = "\x1b[B";
+const UP = "\x1b[A";
 const LEFT = "\x1b[D";
 const RIGHT = "\x1b[C";
 const TAB = "\t";
@@ -41,6 +42,9 @@ const SHIFT_TAB = "\x1b[Z";
 const CTRL_ENTER = "\x1b[13;5u";
 const CTRL_C = "\x03";
 const CTRL_R = "\x12";
+const BACKSPACE_DEL = "\x7f";
+const BACKSPACE_BS = "\x08";
+const FORWARD_DELETE = "\x1b[3~";
 const ANSI_SGR = /\x1b\[[0-9;]*m/g;
 
 const longOption = {
@@ -201,7 +205,7 @@ function assertStableFrameGeometry(frames: string[][], anchor: (line: string) =>
 }
 
 /** Drive a real custom UI to completion and retain frames for focus assertions. */
-async function executeCustomUI(tool: RegisteredTool, params: unknown, inputs: string[]) {
+async function executeCustomUI(tool: RegisteredTool, params: unknown, inputs: string[], focused = false) {
 	const snapshots: string[][] = [];
 	const submissions: unknown[] = [];
 	const theme = {
@@ -224,6 +228,7 @@ async function executeCustomUI(tool: RegisteredTool, params: unknown, inputs: st
 					value = submitted;
 					submissions.push(submitted);
 				});
+				if (focused) component.focused = true;
 				snapshots.push(component.render(WIDTH));
 				for (const input of inputs) {
 					component.handleInput(input);
@@ -952,6 +957,184 @@ assert.match(
 assert.equal(batchDigitCustom.submissions.length, 1);
 assert.equal(batchDigitCustom.result.details.answers[0].answer.label, "Batch custom");
 
+// A saved single-select custom answer keeps its draft while toggled off. After
+// it is reselected, lowercase e explicitly reopens the editor at the text end.
+const standaloneCachedCustom = await executeCustomUI(
+	askOne,
+	{ question: "Re-edit cached standalone custom", options: [{ label: "Preset" }] },
+	[DOWN, " ", "standalone cached", "\r", " ", " ", "e", " appended", "\r", "\r"],
+	true,
+);
+const standaloneCachedEditFrame = standaloneCachedCustom.snapshots[7]!;
+assert.match(
+	plainText(standaloneCachedCustom.snapshots[6]!),
+	/E edit/,
+	"standalone cached custom: the reselected answer advertises its edit key",
+);
+assert.match(
+	plainText(standaloneCachedEditFrame),
+	/(?:Typing|Editing)[^\n]*Enter (?:save|Save)/,
+	"standalone cached custom: e reopens the reselected answer editor",
+);
+assert.ok(
+	standaloneCachedEditFrame.some((line) => line.includes(`standalone cached${CURSOR_MARKER}`)),
+	"standalone cached custom: e preserves the text with its caret at the end",
+);
+assert.equal(standaloneCachedCustom.submissions.length, 1);
+assert.equal(
+	standaloneCachedCustom.result.details.answers[0].label,
+	"standalone cached appended",
+	"standalone cached custom: the confirmed answer includes text appended after e",
+);
+
+const batchCachedCustom = await executeCustomUI(
+	askMany,
+	{ questions: [{ question: "Re-edit cached batch custom", options: [{ label: "Preset" }] }] },
+	[DOWN, " ", "batch cached", "\r", " ", " ", "e", " appended", "\r", "\r", "\r"],
+	true,
+);
+const batchCachedEditFrame = batchCachedCustom.snapshots[7]!;
+assert.match(
+	plainText(batchCachedCustom.snapshots[6]!),
+	/E Edit/,
+	"batch cached custom: the reselected answer advertises its edit key",
+);
+assert.match(
+	plainText(batchCachedEditFrame),
+	/(?:Typing|Editing)[^\n]*Enter (?:save|Save)/,
+	"batch cached custom: e reopens the reselected answer editor",
+);
+assert.ok(
+	batchCachedEditFrame.some((line) => line.includes(`batch cached${CURSOR_MARKER}`)),
+	"batch cached custom: e preserves the text with its caret at the end",
+);
+assert.match(plainText(batchCachedCustom.snapshots[10]!), /Review your answers[\s\S]*batch cached appended/);
+assert.equal(batchCachedCustom.submissions.length, 1, "batch cached custom: review is submitted once");
+assert.equal(
+	batchCachedCustom.result.details.answers[0].answer.label,
+	"batch cached appended",
+	"batch cached custom: the submitted answer includes text appended after e",
+);
+
+// Reopened editors must pass terminal deletion keys through to the editor.
+// Cover both legacy Backspace bytes and forward Delete in each single-select host.
+for (const host of [
+	{
+		name: "standalone",
+		tool: askOne,
+		params: { question: "Delete in reopened standalone custom", options: [{ label: "Preset" }] },
+		confirm: ["\r"],
+		answer: (result: any) => result.details.answers[0].label,
+	},
+	{
+		name: "batch",
+		tool: askMany,
+		params: { questions: [{ question: "Delete in reopened batch custom", options: [{ label: "Preset" }] }] },
+		confirm: ["\r", "\r"],
+		answer: (result: any) => result.details.answers[0].answer.label,
+	},
+]) {
+	for (const deletion of [
+		{ name: "DEL Backspace", input: [BACKSPACE_DEL], expected: "see yo!" },
+		{ name: "BS Backspace", input: [BACKSPACE_BS], expected: "see yo!" },
+		{ name: "forward Delete", input: [LEFT, FORWARD_DELETE], expected: "see yo!" },
+	]) {
+		const edited = await executeCustomUI(
+			host.tool,
+			host.params,
+			["2", "see you", "\r", "e", ...deletion.input, "!", "\r", ...host.confirm],
+			true,
+		);
+		assert.equal(
+			host.answer(edited.result),
+			deletion.expected,
+			`${host.name}: ${deletion.name} deletes from a saved custom answer before append/save/confirm`,
+		);
+	}
+}
+
+// The same e gesture also reopens a custom answer that is still selected,
+// without requiring the deselect/reselect cache transition.
+for (const scenario of [
+	{
+		name: "standalone selected custom",
+		tool: askOne,
+		params: { question: "Re-edit selected standalone custom", options: [{ label: "Preset" }] },
+		text: "standalone selected",
+	},
+	{
+		name: "batch selected custom",
+		tool: askMany,
+		params: { questions: [{ question: "Re-edit selected batch custom", options: [{ label: "Preset" }] }] },
+		text: "batch selected",
+	},
+]) {
+	const frames = await captureToolRender(scenario.tool, scenario.params, {
+		inputs: [DOWN, " ", scenario.text, "\r", "e"],
+		widths: [80],
+		focused: true,
+	});
+	const reopened = frames.at(-1)!;
+	assert.match(
+		plainText(reopened),
+		/(?:Typing|Editing)[^\n]*Enter (?:save|Save)/,
+		`${scenario.name}: e reopens the currently selected answer editor`,
+	);
+	assert.ok(
+		reopened.some((line) => line.includes(`${scenario.text}${CURSOR_MARKER}`)),
+		`${scenario.name}: e preserves the text with its caret at the end`,
+	);
+
+	const escaped = await captureToolRender(scenario.tool, scenario.params, {
+		inputs: [DOWN, " ", scenario.text, "\r", "e", "\x1b"],
+		widths: [80],
+	});
+	assert.match(
+		plainText(escaped.at(-1)!),
+		new RegExp(`\\(●\\) 2\\. Something else…[\\s\\S]*${scenario.text}`),
+		`${scenario.name}: Esc from editing keeps the saved custom answer selected`,
+	);
+}
+
+// Clearing a custom editor opened while another row is selected must preserve
+// that unrelated standalone selection.
+const standaloneClearEditorWithPreset = await captureToolRender(
+	askOne,
+	{ question: "Clear standalone custom editor with preset", options: [{ label: "Preset" }] },
+	{ inputs: [" ", DOWN, "e", CTRL_C, "\x1b"], widths: [80], focused: true },
+);
+assert.match(
+	plainText(standaloneClearEditorWithPreset.at(-1)!),
+	/\(●\) 1\. Preset[\s\S]*\( \) 2\. Something else…/,
+	"clearing an empty standalone custom editor preserves the selected preset",
+);
+
+// Clearing a reopened batch custom editor keeps all single-select state maps
+// synchronized, whether the prior answer was a preset or the custom row.
+const batchClearEditorWithPreset = await captureToolRender(
+	askMany,
+	{ questions: [{ question: "Clear custom editor with preset", options: [{ label: "Preset" }] }] },
+	{ inputs: [" ", DOWN, "e", CTRL_C, "\x1b"], widths: [80], focused: true },
+);
+assert.match(
+	plainText(batchClearEditorWithPreset.at(-1)!),
+	/\(●\) 1\. Preset[\s\S]*\( \) 2\. Something else…/,
+	"clearing an empty custom editor preserves the selected preset",
+);
+
+const batchClearEditorWithCustom = await captureToolRender(
+	askMany,
+	{ questions: [{ question: "Clear custom editor with custom", options: [{ label: "Preset" }] }] },
+	{ inputs: ["2", "saved custom", "\r", "e", CTRL_C, "\x1b"], widths: [80], focused: true },
+);
+const batchClearedCustomFrame = plainText(batchClearEditorWithCustom.at(-1)!);
+assert.match(
+	batchClearedCustomFrame,
+	/\( \) 1\. Preset[\s\S]*\( \) 2\. Something else…/,
+	"clearing a selected custom answer removes its selected row",
+);
+assert.doesNotMatch(batchClearedCustomFrame, /saved custom/);
+
 // Ctrl+C clears active answer editors without closing them. This applies to
 // standalone and batch custom answers and to the shared open-text editor path.
 for (const scenario of [
@@ -1098,6 +1281,74 @@ const standaloneCustomRowHint = await captureToolRender(
 	{ inputs: [DOWN], widths: [80] },
 );
 assert.match(plainText(standaloneCustomRowHint.at(-1)!), /Space edit • Enter edit/);
+
+// Single-select hints describe the focused row's Space behavior, not merely
+// whether some other row is selected. Disabled Enter remains explicit when
+// lower-priority actions do not fit.
+const standalonePresetWithEmptyCustomFocused = await captureToolRender(
+	askOne,
+	{ question: "Focused empty custom hint", options: [{ label: "Preset" }] },
+	{ inputs: [" ", DOWN], widths: [80] },
+);
+assert.match(
+	plainText(standalonePresetWithEmptyCustomFocused.at(-1)!),
+	/Space edit • Enter confirm/,
+	"a focused empty custom row advertises edit while a preset remains selected",
+);
+
+const standaloneSelectedCustomHint = await captureToolRender(
+	askOne,
+	{ question: "Focused selected custom hint", options: [{ label: "Preset" }] },
+	{ inputs: ["2", "saved custom", "\r"], widths: [80] },
+);
+assert.match(
+	plainText(standaloneSelectedCustomHint.at(-1)!),
+	/Space remove • Enter confirm/,
+	"a focused selected custom row advertises removal",
+);
+
+const standaloneCachedCustomHint = await captureToolRender(
+	askOne,
+	{ question: "Focused cached custom hint", options: [{ label: "Preset" }] },
+	{ inputs: ["2", "saved custom", "\r", UP, " ", DOWN], widths: [80] },
+);
+assert.match(
+	plainText(standaloneCachedCustomHint.at(-1)!),
+	/Space select • Enter confirm/,
+	"a focused unselected custom row with saved text advertises selection",
+);
+
+for (const scenario of [
+	{ name: "preset", inputs: [] },
+	{ name: "custom", inputs: [DOWN] },
+]) {
+	const standaloneNarrowDisabledHint = await captureToolRender(
+		askOne,
+		{ question: `Narrow disabled ${scenario.name} hint`, options: [{ label: "Preset" }] },
+		{ inputs: scenario.inputs, widths: [NARROW_WIDTH] },
+	);
+	assert.match(
+		plainText(standaloneNarrowDisabledHint.at(-1)!),
+		/Enter waits/,
+		`a narrow single-select hint keeps disabled Enter explicit with ${scenario.name} focused`,
+	);
+}
+
+for (const boundary of [
+	{ name: "preset", inputs: [] as string[], width: 11, expected: /⏎ waits/ },
+	{ name: "custom", inputs: [DOWN], width: 7, expected: /⏎×/ },
+]) {
+	const frames = await captureToolRender(
+		askOne,
+		{ question: `Boundary ${boundary.name}`, options: [{ label: "Preset" }] },
+		{ inputs: boundary.inputs, widths: [boundary.width] },
+	);
+	assert.match(
+		plainText(frames.at(-1)!),
+		boundary.expected,
+		`the ${boundary.name} boundary hint retains explicit disabled Enter semantics`,
+	);
+}
 
 // The active tab and status stay visible when a narrow viewport can show only
 // a small moving window of a larger batch.

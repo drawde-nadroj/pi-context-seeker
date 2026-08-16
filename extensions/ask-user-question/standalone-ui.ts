@@ -270,7 +270,6 @@ export function askSingleChoice(
 			tui.requestRender();
 		}
 		function openOtherEditor(): void {
-			stagedAnswer = null;
 			choiceList.selectOther();
 			noteFocused = false;
 			noteEditor.focused = false;
@@ -335,6 +334,46 @@ export function askSingleChoice(
 					renderOptionalNote(tail, width, theme, noteEditor, clarification.active ? false : noteFocused, 5);
 					tail.push("");
 				}
+				const focusedItem = choiceList.selectedItem;
+				const focusedOther = focusedItem.isOther;
+				const focusedSelected = !!stagedAnswer && answerSelectionKey(stagedAnswer) === focusedItem.id;
+				const spaceAction = focusedSelected ? "Space remove" : focusedOther && !otherEditorValue.trim() ? "Space edit" : "Space select";
+				const selectionActions: SemanticAction[] = [{ text: "↑↓ focus", color: "muted" }];
+				if (focusedOther) selectionActions.push({ text: "E edit", color: "accent" });
+				if (stagedAnswer) selectionActions.push(
+					{ text: spaceAction, color: "accent" },
+					{ text: "Enter confirm", color: "success" },
+					{ text: "Esc clear", color: "muted" },
+				);
+				else selectionActions.push(
+					{ text: spaceAction, color: "accent" },
+					{ text: "Enter needs selection", color: "muted" },
+					{ text: "Tab note", color: "muted" },
+					{ text: "Esc cancel", color: "muted" },
+				);
+				let selectionHint = actionLine(theme, selectionActions);
+				const hintContentWidth = Math.max(0, width - 1);
+				const disabledEnter = hintContentWidth >= visibleWidth("Enter waits") ? "Enter waits" : hintContentWidth >= visibleWidth("⏎ waits") ? "⏎ waits" : "⏎×";
+				if (focusedOther && visibleWidth(selectionHint) > width) {
+					const editAction: SemanticAction = { text: "E edit", color: "accent" };
+					const enterAction: SemanticAction = stagedAnswer
+						? { text: "Enter confirm", color: "success" }
+						: { text: "Enter waits", color: "muted" };
+					selectionHint = actionLine(theme, [editAction, { text: spaceAction, color: "accent" }, enterAction]);
+					if (visibleWidth(selectionHint) > width) {
+						selectionHint = actionLine(theme, stagedAnswer
+							? [editAction, { text: spaceAction, color: "accent" }]
+							: [{ text: spaceAction, color: "accent" }, enterAction]);
+					}
+					if (visibleWidth(selectionHint) > width) {
+						selectionHint = actionLine(theme, stagedAnswer
+							? [{ text: spaceAction, color: "accent" }]
+							: [{ text: disabledEnter, color: "muted" }]);
+					}
+				}
+				if (!stagedAnswer && visibleWidth(selectionHint) > width) {
+					selectionHint = actionLine(theme, [{ text: disabledEnter, color: "muted" }]);
+				}
 				const hint = noteFocused
 					? actionLine(theme, [
 						{ text: "Note", color: "accent" }, { text: "Ctrl+C clear", color: "muted" },
@@ -345,9 +384,7 @@ export function askSingleChoice(
 							{ text: "Typing", color: "accent" }, { text: "Enter save", color: "accent" },
 							{ text: "Ctrl+C clear", color: "muted" }, { text: "Tab note", color: "muted" }, { text: "Esc back", color: "muted" },
 						])
-						: actionLine(theme, stagedAnswer
-							? [{ text: "↑↓ focus", color: "muted" }, { text: "Space change/remove", color: "accent" }, { text: "Enter confirm", color: "success" }, { text: "Esc clear", color: "muted" }]
-							: [{ text: "↑↓ focus", color: "muted" }, { text: "Space select", color: "accent" }, { text: "Enter needs selection", color: "muted" }, { text: "Tab note", color: "muted" }, { text: "Esc cancel", color: "muted" }]);
+						: selectionHint;
 				if (clarification.active) {
 					tail.push(...clarification.render(width));
 				} else {
@@ -385,7 +422,7 @@ export function askSingleChoice(
 					if (matchesKey(data, Key.ctrl("c"))) {
 						editor.setText("");
 						otherEditorValue = "";
-						stagedAnswer = null;
+						if (stagedAnswer?.type === "other") stagedAnswer = null;
 					} else if (matchesKey(data, Key.tab)) return focusNote();
 					else if (matchesKey(data, Key.escape)) {
 						editMode = false;
@@ -394,6 +431,7 @@ export function askSingleChoice(
 					} else editor.handleInput(data);
 				} else {
 					if (matchesKey(data, Key.tab)) return focusNote();
+					if ((data === "e" || data === "E") && choiceList.selectedItem.isOther) return openOtherEditor();
 					if (/^[1-9]$/.test(data)) {
 						const index = parseInt(data, 10) - 1;
 						if (index < choiceList.length) { choiceList.setSelectedIndex(index); return toggleFocusedAnswer(); }

@@ -579,12 +579,7 @@ export class TabbedQuestions {
 		if (this.editMode) {
 			if (matchesKey(data, Key.ctrl("c"))) {
 				this.otherEditor.setText("");
-				this.otherText = "";
-				const tab = this.getActiveTab();
-				tab.otherText = "";
-				this.selected.delete("other");
-				if (tab.mode === "multi-select") this.syncMultiSelectState();
-				else tab.answer = null;
+				this.saveOtherDraft();
 				this.invalidate();
 				this.tui.requestRender();
 				return;
@@ -703,6 +698,11 @@ export class TabbedQuestions {
 		const question = this.questions[this.activeTab];
 		const choiceList = this.getOrCreateChoiceList(question);
 
+		if ((data === "e" || data === "E") && choiceList.selectedItem.isOther) {
+			this.openOtherEditor();
+			return;
+		}
+
 		if (/^[1-9]$/.test(data)) {
 			const index = parseInt(data, 10) - 1;
 			if (index < choiceList.length) {
@@ -780,12 +780,6 @@ export class TabbedQuestions {
 	private openOtherEditor(): void {
 		this.markQuestionInteracted();
 		if (this.choiceList) this.choiceList.selectOther();
-		const tab = this.getActiveTab();
-		if (tab.mode === "single-select") {
-			tab.answer = null;
-			tab.selected = new Map();
-			this.selected = new Map();
-		}
 		this.cancelArmed = false;
 		this.editMode = true;
 		this.editingOtherQuestionId = this.questions[this.activeTab]?.id;
@@ -952,6 +946,7 @@ export class TabbedQuestions {
 				? "Space Remove"
 				: item?.isOther && !tab.otherText.trim() ? "Space Edit" : ready ? "Space Change" : "Space Select";
 			primary = [action(spaceAction, itemSelected ? "muted" : "accent")];
+			if (item?.isOther) primary.push(action("E Edit", "accent"));
 			if (ready) primary.push(action(`Enter ${advanceLabel}`, "success"));
 		} else if (item?.isOther) {
 			const spaceAction = itemSelected ? "Space Remove" : tab.otherText.trim() ? "Space Select" : "Space Edit";
