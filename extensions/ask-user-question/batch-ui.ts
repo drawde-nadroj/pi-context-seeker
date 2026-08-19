@@ -402,6 +402,34 @@ export class TabbedQuestions {
 		else this.openReview();
 	}
 
+	private confirmCurrentQuestion(fromNote = false): void {
+		const tab = this.getActiveTab();
+		if (!tab) return;
+		if (tab.mode === "text") {
+			this.syncAnswerFromTab();
+			this.advance();
+			return;
+		}
+		if (fromNote && !this.isAnswered(tab)) {
+			this.feedback = "Select an answer with Space before continuing.";
+			this.invalidate();
+			this.tui.requestRender();
+			return;
+		}
+		const choiceList = this.getOrCreateChoiceList(this.questions[this.activeTab]);
+		if (this.isAnswered(tab) && (tab.mode === "single-select" || fromNote || !choiceList.selectedItem.isOther)) {
+			this.advance();
+			return;
+		}
+		if (tab.mode === "multi-select" && choiceList.selectedItem.isOther) {
+			this.openOtherEditor();
+			return;
+		}
+		this.feedback = "Select an answer with Space before continuing.";
+		this.invalidate();
+		this.tui.requestRender();
+	}
+
 	private openReview(allowSkipped = false): void {
 		// Ctrl+Enter can be pressed from any editable field. Preserve the active
 		// draft before deciding which questions are answered.
@@ -606,6 +634,11 @@ export class TabbedQuestions {
 
 		// Note editor is focused
 		if (this.noteFocused) {
+			if (isSubmitEnter(data)) {
+				this.leaveNoteFocus();
+				this.confirmCurrentQuestion(true);
+				return;
+			}
 			if (matchesKey(data, Key.ctrl("c"))) {
 				this.markQuestionInteracted();
 				this.noteEditor.setText("");
@@ -673,9 +706,8 @@ export class TabbedQuestions {
 		}
 
 		// Enter confirms the current answer and advances; the last question opens Review.
-		if (tab.mode === "text" && isSubmitEnter(data)) {
-			this.syncAnswerFromTab();
-			this.advance();
+		if (isSubmitEnter(data)) {
+			this.confirmCurrentQuestion();
 			return;
 		}
 
@@ -922,7 +954,8 @@ export class TabbedQuestions {
 			return lines;
 		}
 		if (this.noteFocused && presentationIndex === this.activeTab) {
-			row([action("Note", "accent"), action("Ctrl+C Clear"), action("Tab Back", "accent"), ...partialActions, clarificationAction, action("Esc Back")]);
+			const narrow = width <= 20;
+			row([action("Note", "accent"), action(`Enter ${presentationIndex === this.tabs.length - 1 ? "Review" : "Next"}`, "success"), action(narrow ? "⇧↵ Newline" : "Shift+Enter NL"), action(narrow ? "Ctrl+C" : "Ctrl+C Clear"), action(narrow ? "Tab" : "Tab Back", "accent"), ...partialActions, action(narrow ? "Esc" : "Esc Back")]);
 			const minimumLines = width < 24 ? 5 : 2;
 			while (lines.length < minimumLines) lines.push("");
 			return lines;

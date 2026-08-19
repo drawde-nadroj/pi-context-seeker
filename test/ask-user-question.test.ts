@@ -39,6 +39,7 @@ const LEFT = "\x1b[D";
 const RIGHT = "\x1b[C";
 const TAB = "\t";
 const SHIFT_TAB = "\x1b[Z";
+const SHIFT_ENTER = "\x1b[13;2u";
 const CTRL_ENTER = "\x1b[13;5u";
 const CTRL_C = "\x03";
 const CTRL_R = "\x12";
@@ -479,11 +480,11 @@ const batchPastedFreeForm = await executeCustomUI(
 assert.equal(batchPastedFreeForm.result.details.answers[0].answer, largeFreeFormPaste);
 
 // Optional notes use one native Editor across standalone modes. Tab visibly moves
-// focus to the note and Ctrl+Enter submits without sacrificing the typed draft.
+// focus to the note and plain Enter confirms without sacrificing the typed draft.
 const standaloneNote = await executeCustomUI(
 	askOne,
 	{ question: "Choose with a note", options: [{ label: "Native" }] },
-	[" ", TAB, "Keep this inline", CTRL_ENTER],
+	[" ", TAB, "Keep this inline", "\r"],
 );
 assert.match(plainText(standaloneNote.snapshots[2]!), /Note \(optional\):/);
 assert.match(plainText(standaloneNote.snapshots[3]!), /Keep this[\s\S]*inline/);
@@ -497,20 +498,27 @@ assert.equal(singleNoteTextLine, singleNoteLabelLine, "note text should begin on
 assert.match(singleNoteFrame.split("\n")[singleNoteTextLine]!, /^ {3}Note \(optional\): Keep this/);
 assert.match(singleNoteFrame.split("\n").find((line) => line.includes("inline"))!, /^ {20}inline/, "wrapped note text aligns beneath its content");
 
-// Plain Enter is harmless inside notes; Shift+Enter/Ctrl+J creates a newline,
-// and Ctrl+Enter submits the complete multiline value.
+// Shift+Enter and Ctrl+J each create a newline, while plain Enter submits the complete value.
 const multilineNote = await executeCustomUI(
 	askOne,
 	{ question: "Add multiline context", options: [{ label: "Native" }] },
-	[" ", TAB, "first", "\r", " line", "\n", "second", CTRL_ENTER],
+	[" ", TAB, "first", SHIFT_ENTER, "second", "\n", "third", "\r"],
 );
-assert.equal(multilineNote.result.details.note, "first line\nsecond");
-assert.match(multilineNote.result.content[0]!.text, /Note: first line\nsecond/);
+assert.equal(multilineNote.result.details.note, "first\nsecond\nthird");
+assert.match(multilineNote.result.content[0]!.text, /Note: first\nsecond\nthird/);
+
+const standaloneTextNote = await executeCustomUI(
+	askOne,
+	{ question: "Explain" },
+	["Answer", TAB, "Text note", "\r"],
+);
+assert.equal(standaloneTextNote.result.details.answers[0].value, "Answer");
+assert.equal(standaloneTextNote.result.details.note, "Text note");
 
 const standaloneMultiNote = await executeCustomUI(
 	askOne,
 	{ question: "Choose several", options: [{ label: "Alpha" }], multiSelect: true },
-	[" ", TAB, "Multi note", CTRL_ENTER],
+	[" ", TAB, "Multi note", "\r"],
 );
 assert.match(standaloneMultiNote.result.content[0]!.text, /User selected:\n- 1\. Alpha\nNote: Multi note/);
 assert.equal(standaloneMultiNote.result.details.note, "Multi note");
@@ -518,6 +526,17 @@ const multiNoteFrame = plainText(standaloneMultiNote.snapshots[3]!);
 const multiNoteTextLine = multiNoteFrame.split("\n").find((line) => line.includes("Note (optional):"));
 assert.match(multiNoteTextLine!, /^ {7}Note \(optional\): Multi/);
 assert.match(multiNoteFrame.split("\n").find((line) => line.includes("note"))!, /^ {24}note/);
+
+for (const scenario of [
+	{ name: "text", params: { question: "Narrow text note" }, confirm: "submit" },
+	{ name: "single", params: { question: "Narrow single note", options: [{ label: "Alpha" }] }, confirm: "confirm" },
+	{ name: "multi", params: { question: "Narrow multi note", options: [{ label: "Alpha" }], multiSelect: true }, confirm: "done" },
+]) {
+	const frame: string[] = (await captureToolRender(askOne, scenario.params, { inputs: [TAB], widths: [NARROW_WIDTH], focused: true })).at(-1)!;
+	const text = plainText(frame);
+	assert.match(text, new RegExp(`↵ ${scenario.confirm}.*⇧↵ NL`), `${scenario.name}: narrow note controls retain Enter and newline`);
+	assert.ok(frame.every((line) => visibleWidth(line) <= NARROW_WIDTH), `${scenario.name}: narrow note controls fit the frame`);
+}
 
 const noEmptyMultiSubmit = await executeCustomUI(
 	askOne,
@@ -585,15 +604,62 @@ assert.match(plainText(noteEscapeSnapshots.at(-1)!), /Note \(optional\):\s+draft
 const batchNote = await executeCustomUI(
 	askMany,
 	{ questions: [{ question: "Batch choice", options: [{ label: "Alpha" }] }] },
-	[TAB, "Batch note", TAB, " ", "\r", "\r"],
+	[" ", TAB, "Batch note", "\r", "\r"],
 );
-assert.match(plainText(batchNote.snapshots[1]!), /Note \(optional\):/);
-assert.match(plainText(batchNote.snapshots[3]!), /→ \( \) 1\. Alpha/);
-assert.match(plainText(batchNote.snapshots[4]!), /→ \(●\) 1\. Alpha/);
-assert.match(plainText(batchNote.snapshots[5]!), /Review your answers[\s\S]*Note: Batch note/);
-assert.match(plainText(batchNote.snapshots[5]!), /Enter Submit/);
+assert.match(plainText(batchNote.snapshots[2]!), /Note \(optional\):/);
+assert.match(plainText(batchNote.snapshots[4]!), /Review your answers[\s\S]*Note: Batch note/);
+assert.match(plainText(batchNote.snapshots[4]!), /Enter Submit/);
 assert.match(batchNote.result.content[0]!.text, /Q1: Batch choice\nAnswer: 1\. Alpha\nNote: Batch note/);
 assert.equal(batchNote.result.details.answers[0].note, "Batch note");
+
+const batchNoteAdvance = await executeCustomUI(
+	askMany,
+	{ questions: [
+		{ question: "First", options: [{ label: "Alpha" }] },
+		{ question: "Second", options: [{ label: "Beta" }] },
+	] },
+	[" ", TAB, "First", SHIFT_ENTER, "shift", "\n", "ctrl-j", "\r", " ", TAB, "Final note", "\r", "\r"],
+);
+assert.equal(batchNoteAdvance.result.details.answers[0].note, "First\nshift\nctrl-j");
+assert.equal(batchNoteAdvance.result.details.answers[1].note, "Final note");
+assert.match(plainText(batchNoteAdvance.snapshots[8]!), /Second/);
+assert.match(plainText(batchNoteAdvance.snapshots[12]!), /Review your answers/);
+
+const invalidBatchNoteEnter = await executeCustomUI(
+	askMany,
+	{ questions: [{ question: "Must choose", options: [{ label: "Alpha" }] }] },
+	[TAB, "Preserved", "\r", " ", "\r", "\r"],
+);
+assert.match(plainText(invalidBatchNoteEnter.snapshots[3]!), /Select an answer with Space/);
+assert.equal(invalidBatchNoteEnter.result.details.answers[0].note, "Preserved");
+
+const unansweredBatchMultiNote = await executeCustomUI(
+	askMany,
+	{ questions: [{ question: "Choose many", options: [{ label: "Alpha" }], multiSelect: true }] },
+	[TAB, "Preserved multi note", "\r", " ", "\r", "\r"],
+);
+assert.match(plainText(unansweredBatchMultiNote.snapshots[3]!), /Select an answer with Space/);
+assert.equal(unansweredBatchMultiNote.result.details.answers[0].note, "Preserved multi note");
+
+const batchMultiNoteIgnoresChoiceCursor = await executeCustomUI(
+	askMany,
+	{ questions: [{ question: "Choose many", options: [{ label: "Alpha" }], multiSelect: true }] },
+	[" ", DOWN, TAB, "Multi note", "\r", "\r"],
+);
+assert.equal((batchMultiNoteIgnoresChoiceCursor.result.details.answers[0].answer as any[])[0].label, "Alpha");
+assert.equal(batchMultiNoteIgnoresChoiceCursor.result.details.answers[0].note, "Multi note");
+
+const unansweredBatchMultiNoteOnOther = await executeCustomUI(
+	askMany,
+	{ questions: [{ question: "Choose many from note", options: [{ label: "Alpha" }], multiSelect: true }] },
+	[DOWN, TAB, "Preserved on Other", "\r", UP, " ", "\r", "\r"],
+);
+const unansweredBatchMultiNoteOnOtherFeedback = plainText(unansweredBatchMultiNoteOnOther.snapshots[4]!);
+assert.match(unansweredBatchMultiNoteOnOtherFeedback, /Select an answer with Space/);
+assert.match(unansweredBatchMultiNoteOnOtherFeedback, /Preserved on Other/);
+assert.doesNotMatch(unansweredBatchMultiNoteOnOtherFeedback, /(?:Typing|Editing).*custom answer/i);
+assert.equal((unansweredBatchMultiNoteOnOther.result.details.answers[0].answer as any[])[0].label, "Alpha");
+assert.equal(unansweredBatchMultiNoteOnOther.result.details.answers[0].note, "Preserved on Other");
 
 // Tab and Shift+Tab both provide a reversible answer ↔ note focus cycle.
 const reverseFocus = await captureToolRender(

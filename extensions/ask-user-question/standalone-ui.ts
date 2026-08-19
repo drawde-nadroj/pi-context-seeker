@@ -10,6 +10,31 @@ function actionLine(theme: any, actions: SemanticAction[]): string {
 	return ` ${actions.map((action) => theme.fg(action.color, action.text)).join(theme.fg("muted", " • "))}`;
 }
 
+function noteContextLine(theme: any, width: number): string {
+	const variants: SemanticAction[][] = [
+		[{ text: "Note", color: "accent" }, { text: "Ctrl+/ Ask agent", color: "muted" }, { text: "Ctrl+C clear", color: "muted" }],
+		[{ text: "Note", color: "accent" }, { text: "Ctrl+/ Ask", color: "muted" }, { text: "^C Clear", color: "muted" }],
+		[{ text: "Note", color: "accent" }, { text: "^C Clear", color: "muted" }],
+		[{ text: "Note", color: "accent" }, { text: "^C", color: "muted" }],
+	];
+	const chosen = variants.find((actions) => visibleWidth(` ${actions.map((action) => action.text).join(" • ")}`) <= width) ?? variants.at(-1)!;
+	return actionLine(theme, chosen);
+}
+
+function noteActionLine(theme: any, width: number, confirmLabel: string, primaryLabel: string): string {
+	const variants: SemanticAction[][] = [
+		[
+			{ text: `Enter ${confirmLabel}`, color: "success" }, { text: "Shift+Enter newline", color: "muted" },
+			{ text: "Ctrl+C clear", color: "muted" }, { text: `Tab ${primaryLabel}`, color: "accent" }, { text: "Esc back", color: "muted" },
+		],
+		[{ text: `Enter ${confirmLabel}`, color: "success" }, { text: "⇧↵ newline", color: "muted" }, { text: `Tab ${primaryLabel}`, color: "accent" }],
+		[{ text: `↵ ${confirmLabel}`, color: "success" }, { text: "⇧↵ NL", color: "muted" }],
+		[{ text: "↵", color: "success" }, { text: "⇧↵", color: "muted" }],
+	];
+	const chosen = variants.find((actions) => visibleWidth(` ${actions.map((action) => action.text).join(" • ")}`) <= width) ?? variants.at(-1)!;
+	return actionLine(theme, chosen);
+}
+
 function widthAwareLabel(width: number, variants: string[]): string {
 	return variants.find((variant) => visibleWidth(variant) <= width) ?? variants.at(-1)!;
 }
@@ -159,13 +184,12 @@ export function askText(
 				if (clarification.active) {
 					lines.push(...clarification.render(width));
 				} else {
-					add(actionLine(theme, [{ text: "Ctrl+/ Ask agent", color: "muted" }]));
-					add(actionLine(theme, noteFocused
-						? [
-							{ text: "Note", color: "accent" }, { text: "Ctrl+C clear", color: "muted" },
-							{ text: "Tab answer", color: "accent" }, { text: "Esc back", color: "muted" },
-						]
-						: [
+					add(noteFocused
+						? noteContextLine(theme, width)
+						: actionLine(theme, [{ text: "Ctrl+/ Ask agent", color: "muted" }]));
+					add(noteFocused
+						? noteActionLine(theme, width, "submit", "answer")
+						: actionLine(theme, [
 							{ text: "Enter submit", color: answerEditor.getExpandedText().trim() ? "success" : "accent" },
 							...(["Shift+Enter newline", "Ctrl+C clear", "Tab note", "Esc cancel"].map((text) => ({ text, color: "muted" as const }))),
 						]));
@@ -183,7 +207,7 @@ export function askText(
 				if (isAskAgentKey(data)) { feedback = ""; clarification.open(); invalidate(); return; }
 				data = normalizeFocusCycleKey(data);
 				if (noteFocused) {
-					if (matchesKey(data, Key.ctrl("enter")) || matchesKey(data, Key.alt("enter"))) return finish();
+					if (isSubmitEnter(data) || matchesKey(data, Key.ctrl("enter")) || matchesKey(data, Key.alt("enter"))) return finish();
 					if (matchesKey(data, Key.escape) || matchesKey(data, Key.tab)) return focusPrimary();
 					if (matchesKey(data, Key.ctrl("c"))) noteEditor.setText("");
 					else noteEditor.handleInput(data);
@@ -375,10 +399,7 @@ export function askSingleChoice(
 					selectionHint = actionLine(theme, [{ text: disabledEnter, color: "muted" }]);
 				}
 				const hint = noteFocused
-					? actionLine(theme, [
-						{ text: "Note", color: "accent" }, { text: "Ctrl+C clear", color: "muted" },
-						{ text: "Tab answer", color: "accent" }, { text: "Esc back", color: "muted" },
-					])
+					? noteActionLine(theme, width, "confirm", "answer")
 					: editMode
 						? actionLine(theme, [
 							{ text: "Typing", color: "accent" }, { text: "Enter save", color: "accent" },
@@ -388,7 +409,9 @@ export function askSingleChoice(
 				if (clarification.active) {
 					tail.push(...clarification.render(width));
 				} else {
-					tail.push(truncateToWidth(actionLine(theme, [{ text: "Ctrl+/ Ask agent", color: "muted" }]), width));
+					tail.push(truncateToWidth(noteFocused
+						? noteContextLine(theme, width)
+						: actionLine(theme, [{ text: "Ctrl+/ Ask agent", color: "muted" }]), width));
 					tail.push(truncateToWidth(hint, width));
 				}
 				tail.push(truncateToWidth(theme.fg("accent", "─".repeat(width)), width));
@@ -414,7 +437,7 @@ export function askSingleChoice(
 				if (isAskAgentKey(data)) { feedback = ""; clarification.open(); invalidate(); return; }
 				data = normalizeFocusCycleKey(data);
 				if (noteFocused) {
-					if (matchesKey(data, Key.ctrl("enter")) || matchesKey(data, Key.alt("enter"))) return confirmSelected();
+					if (isSubmitEnter(data) || matchesKey(data, Key.ctrl("enter")) || matchesKey(data, Key.alt("enter"))) return confirmSelected();
 					if (matchesKey(data, Key.escape) || matchesKey(data, Key.tab)) return focusPrimary();
 					if (matchesKey(data, Key.ctrl("c"))) noteEditor.setText("");
 					else noteEditor.handleInput(data);
@@ -609,17 +632,16 @@ export function askMultiChoice(
 					? [{ text: otherSpaceAction, color: selected.has("other") ? "muted" : "accent" }, { text: "Enter edit", color: "accent" }, { text: "Tab note", color: "muted" }, { text: "Esc cancel", color: "muted" }]
 					: [{ text: "Space toggle", color: selected.size > 0 ? "muted" : "accent" }, { text: `Enter ${selected.size > 0 ? "done" : "select"}`, color: selected.size > 0 ? "success" : "accent" }, { text: "Tab note", color: "muted" }, { text: "Esc cancel", color: "muted" }];
 				const hint = noteFocused
-					? actionLine(theme, [
-						{ text: "Note", color: "accent" }, { text: "Ctrl+C clear", color: "muted" },
-						{ text: "Tab options", color: "accent" }, { text: "Esc back", color: "muted" },
-					])
+					? noteActionLine(theme, width, "done", "options")
 					: editMode
 						? actionLine(theme, [{ text: "Typing", color: "accent" }, { text: "Enter save", color: "accent" }, { text: "Ctrl+C clear", color: "muted" }, { text: "Tab note", color: "muted" }, { text: "Esc back", color: "muted" }])
 						: actionLine(theme, primaryHint);
 				if (clarification.active) {
 					tail.push(...clarification.render(width));
 				} else {
-					tail.push(truncateToWidth(actionLine(theme, [{ text: "Ctrl+/ Ask agent", color: "muted" }]), width));
+					tail.push(truncateToWidth(noteFocused
+						? noteContextLine(theme, width)
+						: actionLine(theme, [{ text: "Ctrl+/ Ask agent", color: "muted" }]), width));
 					tail.push(truncateToWidth(hint, width));
 				}
 				tail.push(truncateToWidth(theme.fg("accent", "─".repeat(width)), width));
@@ -642,6 +664,18 @@ export function askMultiChoice(
 				if (isAskAgentKey(data)) { feedback = ""; clarification.open(); invalidate(); return; }
 				data = normalizeFocusCycleKey(data);
 				if (noteFocused) {
+					if (isSubmitEnter(data)) {
+						if (otherPending && !selected.has("other")) {
+							noteFocused = false;
+							noteEditor.focused = false;
+							editMode = true;
+							otherEditor.focused = _focused;
+							invalidate();
+							tui.requestRender();
+							return;
+						}
+						return finish();
+					}
 					if (matchesKey(data, Key.ctrl("enter")) || matchesKey(data, Key.alt("enter"))) {
 						if (otherPending && !selected.has("other")) {
 							noteFocused = false;
