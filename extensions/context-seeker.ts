@@ -4,6 +4,7 @@ import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import { askMultiChoice, askSingleChoice, askText, customWithAbort } from "./ask-user-question/standalone-ui.ts";
 import { addWrappedWithPrefix, sanitizeDisplayText } from "./ask-user-question/tui-primitives.ts";
 import { TabbedQuestions, type BatchUIResult } from "./ask-user-question/batch-ui.ts";
+import { questionResultLabel } from "./ask-user-question/historical-labels.ts";
 import {
 	AskQuestionsParams, ResumeQuestionsParams, AskUserQuestionParams, type AskUserQuestionMode, type AskUserQuestionResultDetails,
 	type BatchContinuation, type BatchQuestionResultDetails, type QuestionDef, type TextAnswer,
@@ -121,8 +122,31 @@ function renderBatchResult(result: any, _options: any, theme: any) {
 export default function askUserQuestion(pi: ExtensionAPI) {
 	let continuationClaims = new WeakMap<object, Set<string>>();
 	const resetContinuationClaims = () => { continuationClaims = new WeakMap<object, Set<string>>(); };
-	pi.on("session_start", resetContinuationClaims);
-	pi.on("session_tree", resetContinuationClaims);
+	const labeledThisRuntime = new Set<string>();
+	const labelCompletedQuestions = (_event: unknown, ctx: { sessionManager: { getEntries(): any[] } }) => {
+		const entries = ctx.sessionManager.getEntries();
+		const labelHistory = new Set(
+			entries.filter((entry: any) => entry.type === "label").map((entry: any) => entry.targetId),
+		);
+		for (const entry of entries) {
+			if (labelHistory.has(entry.id) || labeledThisRuntime.has(entry.id)) continue;
+			const label = questionResultLabel(entry);
+			if (!label) continue;
+			pi.setLabel(entry.id, label);
+			labeledThisRuntime.add(entry.id);
+			labelHistory.add(entry.id);
+		}
+	};
+	pi.on("session_start", (event, ctx) => {
+		resetContinuationClaims();
+		labeledThisRuntime.clear();
+		labelCompletedQuestions(event, ctx);
+	});
+	pi.on("session_tree", (event, ctx) => {
+		resetContinuationClaims();
+		labelCompletedQuestions(event, ctx);
+	});
+	pi.on("agent_settled", labelCompletedQuestions);
 
 	pi.registerTool({
 		name: "ask_user_question",
