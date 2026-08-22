@@ -7,6 +7,7 @@ import { validateToolArguments } from "../node_modules/@earendil-works/pi-coding
 
 const CTRL_QUESTION = "\x1b[63;5u";
 const CTRL_ENTER = "\x1b[13;5u";
+const CTRL_R = "\x12";
 const TAB = "\t";
 const ESC = "\x1b";
 const LEFT = "\x1b[D";
@@ -191,6 +192,16 @@ const cases: Array<[string, () => Promise<void>]> = [
 		const multiPaused = await interact(tool, multiParams, ["1", "2", CTRL_QUESTION, "Why?", "\r"]);
 		const multiReopened = await interact(tool, multiParams, [TAB, CTRL_ENTER], standaloneBranch(multiPaused.result), 30, 60, plainTheme);
 		assert.match(multiReopened.frames.at(-1)!, /Typing|Enter save/, "a pending blank custom answer still blocks submit after resume");
+	}],
+	["resumed partial batch keeps regeneration visible and executable", async () => {
+		const tool = register().get("ask_questions");
+		const paused = await interact(tool, { questions }, ["1", "\r", CTRL_QUESTION, "Why retention?", "\r"]);
+		assert.equal(paused.result.details.status, "clarification_requested");
+		const id = paused.result.details.continuationId;
+		const resumed = await interact(register().get("resume_questions"), resume(id, [], "Keep it for compliance.", paused.result.details.revision), [CTRL_R], awaiting(id, paused.result.details.continuation, paused.result.details.revision), 8, 24, plainTheme);
+		assert.match(resumed.frames[0], /Ctrl\+R Regenerate(?: unanswered)?/, "resume still offers regeneration for the unanswered suffix");
+		assert.equal(resumed.result.details.status, "regenerate", "Ctrl+R remains executable after resume");
+		assert.equal(resumed.result.details.answers[0].answer.value, "pg", "the resolved answer remains protected");
 	}],
 	["assistant clarification stays in chat while the preserved ordinary batch form reopens", async () => {
 		const id = "response-layout";

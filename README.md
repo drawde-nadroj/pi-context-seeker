@@ -216,6 +216,8 @@ Each option requires a nonblank `label`; `value`, `description`, and `recommende
 
 Controls vary with the active field; the UI shows the available actions.
 
+- **PageUp / PageDown** (regular TUI): scroll an oversized question frame while keeping its action/footer controls visible
+- **Ctrl+PageUp / Ctrl+PageDown** (fullscreen TUI): scroll the question frame; fullscreen Pi reserves unmodified PageUp/PageDown for the transcript
 - **Up/Down**: move focus through choices without changing the selected answer, or scroll review content
 - **Space** (single-select): select the focused answer, replace the prior selection, or toggle the focused selection off. On an empty **Something else…**, it opens the custom-answer editor
 - **E** (single-select): while **Something else…** is focused, open its editor. Saved text is preserved and editing resumes at the end, whether the custom answer is selected or cached after being toggled off

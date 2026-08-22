@@ -43,6 +43,10 @@ const SHIFT_ENTER = "\x1b[13;2u";
 const CTRL_ENTER = "\x1b[13;5u";
 const CTRL_C = "\x03";
 const CTRL_R = "\x12";
+const PAGE_UP = "\x1b[5~";
+const PAGE_DOWN = "\x1b[6~";
+const CTRL_PAGE_UP = "\x1b[5;5~";
+const CTRL_PAGE_DOWN = "\x1b[6;5~";
 const BACKSPACE_DEL = "\x7f";
 const BACKSPACE_BS = "\x08";
 const FORWARD_DELETE = "\x1b[3~";
@@ -1564,6 +1568,91 @@ for (const multiSelect of [false, true]) {
 		{ rows: 14, widths: [24] },
 	);
 	assert.ok(longFrame[0]!.length <= 14, `standalone ${multiSelect ? "multi" : "single"} full frame fits terminal rows`);
+}
+
+const oversizedDetails = Array.from({ length: 18 }, (_, index) => `Detail row ${index + 1}`).join("\n");
+for (const scenario of [
+	{ name: "standalone", tool: askOne, params: { question: "Oversized standalone top", details: oversizedDetails } },
+	{ name: "batch", tool: askMany, params: { questions: [{ question: "Oversized batch top", details: oversizedDetails }] } },
+] as const) {
+	const frames = await captureToolRender(scenario.tool, scenario.params, {
+		rows: 14,
+		widths: [28],
+		inputs: [PAGE_DOWN, PAGE_UP, CTRL_PAGE_DOWN, CTRL_PAGE_UP],
+	});
+	assert.match(plainText(frames[0]!), /top/, `${scenario.name} starts at the top`);
+	assert.doesNotMatch(plainText(frames[0]!), /Detail row 18/);
+	assert.notEqual(plainText(frames[1]!), plainText(frames[0]!), `${scenario.name} PageDown scrolls without submission`);
+	assert.match(plainText(frames[2]!), /top/, `${scenario.name} PageUp returns to the top`);
+	assert.notEqual(plainText(frames[3]!), plainText(frames[2]!), `${scenario.name} Ctrl+PageDown is a fullscreen-safe alias`);
+	assert.match(plainText(frames[4]!), /top/, `${scenario.name} Ctrl+PageUp returns to the top`);
+	for (const frame of frames) {
+		assert.ok(frame.length <= 14, `${scenario.name} viewport fits terminal rows`);
+		assert.ok(frame.every((line) => visibleWidth(line) <= 28), `${scenario.name} viewport fits width`);
+	}
+}
+
+const tinyScrollableText = await captureToolRender(
+	askOne,
+	{ question: "Tiny scrolling text", details: oversizedDetails },
+	{ rows: 4, widths: [28], inputs: ["x"], focused: true },
+);
+assert.ok(tinyScrollableText[0]!.some((line) => line.includes(CURSOR_MARKER)), "tiny standalone text initially reveals its active editor caret");
+assert.match(plainText(tinyScrollableText.at(-1)!), /x/, "one-row scrolling body preserves the active editor content");
+assert.ok(tinyScrollableText.at(-1)!.some((line) => line.includes(CURSOR_MARKER)), "one-row scrolling body preserves the active editor caret");
+
+for (const multiSelect of [false, true]) {
+	for (const rows of [5, 6, 7, 8]) {
+		const tinyScrollableChoice = await captureToolRender(
+			askOne,
+			{
+				question: "Tiny scrolling choice",
+				details: oversizedDetails,
+				options: [{ label: "First" }, { label: "Second" }],
+				multiSelect,
+			},
+			{ rows, widths: [28], inputs: [DOWN] },
+		);
+		assert.match(
+			plainText(tinyScrollableChoice[0]!),
+			/→ .*1\. First/,
+			`${rows}-row scrolling ${multiSelect ? "multi" : "single"} form reveals the initial focused choice`,
+		);
+		assert.match(
+			plainText(tinyScrollableChoice.at(-1)!),
+			/→ .*2\. Second/,
+			`${rows}-row scrolling ${multiSelect ? "multi" : "single"} form preserves the focused choice`,
+		);
+	}
+}
+
+const resizedTinyChoice = await captureToolRender(
+	askOne,
+	{ question: "Resize choice", details: oversizedDetails, options: [{ label: "ACTIVE_CHOICE" }] },
+	{ rows: [14, 5], widths: [28, 28] },
+);
+assert.match(plainText(resizedTinyChoice[1]!), /→ .*ACTIVE_CHOICE/, "shrinking to a tiny standalone frame reveals its active choice");
+
+for (const scenario of [
+	{
+		name: "standalone choice",
+		tool: askOne,
+		params: { question: "Read before choosing", details: oversizedDetails, options: [{ label: "BOTTOM_CHOICE" }] },
+	},
+	{
+		name: "batch choice",
+		tool: askMany,
+		params: { questions: [{ question: "Read before choosing", details: oversizedDetails, options: [{ label: "BOTTOM_CHOICE" }] }] },
+	},
+] as const) {
+	const frames = await captureToolRender(scenario.tool, scenario.params, {
+		rows: 14,
+		widths: [28],
+		inputs: [PAGE_DOWN, PAGE_DOWN, PAGE_DOWN],
+	});
+	const bottom = plainText(frames.at(-1)!);
+	assert.match(bottom, /BOTTOM_CHOICE/, `${scenario.name} can page through details to the answer choices`);
+	assert.match(bottom, /(?:Enter|Space)/, `${scenario.name} keeps its answer controls visible while scrolled`);
 }
 
 for (const multiSelect of [false, true]) {

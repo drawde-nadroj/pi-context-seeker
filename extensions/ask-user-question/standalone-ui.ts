@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key, type KeybindingsManager, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AskAnswer, AskOption, AnswerWithNote, ClarificationRequest, StandaloneContinuation } from "./domain.ts";
 import { answerSelectionKey, getOtherLabel, sortAnswers } from "./domain.ts";
-import { addWrapped, constrainFrameHeight, createNoteEditor, createQuestionEditor, isAskAgentKey, isSubmitEnter, normalizeFocusCycleKey, renderOptionalNote, sanitizeDisplayText, sanitizeEditorDisplay, WrappedChoiceList, type WrappedChoiceItem } from "./tui-primitives.ts";
+import { addWrapped, createNoteEditor, createQuestionEditor, FrameViewport, isAskAgentKey, isSubmitEnter, normalizeFocusCycleKey, renderOptionalNote, sanitizeDisplayText, sanitizeEditorDisplay, WrappedChoiceList, type WrappedChoiceItem } from "./tui-primitives.ts";
 
 interface SemanticAction { text: string; color: "muted" | "accent" | "success" | "warning" }
 
@@ -118,6 +118,7 @@ export function askText(
 		let cachedWidth: number | undefined;
 		let cachedRows: number | undefined;
 		let cachedLines: string[] | undefined;
+		const frameViewport = new FrameViewport();
 		let noteFocused = initialState?.noteFocused ?? false;
 		let feedback = "";
 		let _focused = false;
@@ -195,15 +196,16 @@ export function askText(
 						]));
 				}
 				add(theme.fg("accent", "─".repeat(width)));
-				constrainFrameHeight(lines, tui.terminal?.rows, 3);
+				const framed = frameViewport.render(lines, tui.terminal?.rows, 3, width, theme);
 				cachedWidth = width;
 				cachedRows = tui.terminal?.rows;
-				cachedLines = lines;
-				return lines;
+				cachedLines = framed;
+				return framed;
 			},
 			invalidate,
 			handleInput(data: string): void {
 				if (clarification.active) { clarification.handle(data); invalidate(); return; }
+				if (frameViewport.handleInput(data)) { invalidate(); tui.requestRender(); return; }
 				if (isAskAgentKey(data)) { feedback = ""; clarification.open(); invalidate(); return; }
 				data = normalizeFocusCycleKey(data);
 				if (noteFocused) {
@@ -250,6 +252,7 @@ export function askSingleChoice(
 		let cachedWidth: number | undefined;
 		let cachedRows: number | undefined;
 		let cachedLines: string[] | undefined;
+		const frameViewport = new FrameViewport();
 		let otherEditorValue = initialState?.otherText ?? "";
 		let feedback = "";
 		let stagedAnswer: AskAnswer | null = initialState?.stagedAnswer ?? null;
@@ -415,25 +418,25 @@ export function askSingleChoice(
 					tail.push(truncateToWidth(hint, width));
 				}
 				tail.push(truncateToWidth(theme.fg("accent", "─".repeat(width)), width));
-				const availableLines = Math.max(0, (tui.terminal?.rows ?? Number.POSITIVE_INFINITY) - lines.length - tail.length);
 				lines.push(...choiceList.render(width, {
 					selectedAnswers: stagedAnswer && answerSelectionKey(stagedAnswer)
 						? new Map([[answerSelectionKey(stagedAnswer)!, stagedAnswer]])
 						: new Map(),
 					showRadio: true,
 					inlineOtherEditor: editMode ? editor : undefined,
-					availableLines,
 				}));
 				lines.push(...tail);
-				constrainFrameHeight(lines, tui.terminal?.rows, 3);
+				const stickyTailLines = !clarification.active && !noteFocused ? tail.length : 3;
+				const framed = frameViewport.render(lines, tui.terminal?.rows, stickyTailLines, width, theme);
 				cachedWidth = width;
 				cachedRows = tui.terminal?.rows;
-				cachedLines = lines;
-				return lines;
+				cachedLines = framed;
+				return framed;
 			},
 			invalidate,
 			handleInput(data: string): void {
 				if (clarification.active) { clarification.handle(data); invalidate(); return; }
+				if (frameViewport.handleInput(data)) { invalidate(); tui.requestRender(); return; }
 				if (isAskAgentKey(data)) { feedback = ""; clarification.open(); invalidate(); return; }
 				data = normalizeFocusCycleKey(data);
 				if (noteFocused) {
@@ -504,6 +507,7 @@ export function askMultiChoice(
 		let cachedWidth: number | undefined;
 		let cachedRows: number | undefined;
 		let cachedLines: string[] | undefined;
+		const frameViewport = new FrameViewport();
 		let _focused = false;
 		let otherPending = initialState?.editingOther ?? false;
 		let feedback = "";
@@ -645,22 +649,22 @@ export function askMultiChoice(
 					tail.push(truncateToWidth(hint, width));
 				}
 				tail.push(truncateToWidth(theme.fg("accent", "─".repeat(width)), width));
-				const availableLines = Math.max(0, (tui.terminal?.rows ?? Number.POSITIVE_INFINITY) - lines.length - tail.length);
 				lines.push(...choiceList.render(width, {
 					selectedAnswers: selected,
 					inlineOtherEditor: editMode ? otherEditor : undefined,
-					availableLines,
 				}));
 				lines.push(...tail);
-				constrainFrameHeight(lines, tui.terminal?.rows, 3);
+				const stickyTailLines = !clarification.active && !noteFocused ? tail.length : 3;
+				const framed = frameViewport.render(lines, tui.terminal?.rows, stickyTailLines, width, theme);
 				cachedWidth = width;
 				cachedRows = tui.terminal?.rows;
-				cachedLines = lines;
-				return lines;
+				cachedLines = framed;
+				return framed;
 			},
 			invalidate,
 			handleInput(data: string): void {
 				if (clarification.active) { clarification.handle(data); invalidate(); return; }
+				if (frameViewport.handleInput(data)) { invalidate(); tui.requestRender(); return; }
 				if (isAskAgentKey(data)) { feedback = ""; clarification.open(); invalidate(); return; }
 				data = normalizeFocusCycleKey(data);
 				if (noteFocused) {

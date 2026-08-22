@@ -1,7 +1,7 @@
 import { CURSOR_MARKER, Key, type KeybindingsManager, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AskAnswer, BatchContinuation, ClarificationTurn, OtherAnswer, OptionAnswer, QuestionDef, TabAnswer, TabState } from "./domain.ts";
 import { getOtherLabel } from "./domain.ts";
-import { addWrapped, addWrappedWithPrefix, constrainFrameHeight, createNoteEditor, createQuestionEditor, isAskAgentKey, isSubmitEnter, normalizeFocusCycleKey, renderOptionalNote, renderSoftwareCaret, sanitizeDisplayText, sanitizeEditorDisplay, sanitizeProgressLabel, truncateLabel, WrappedChoiceList, type WrappedChoiceItem } from "./tui-primitives.ts";
+import { addWrapped, addWrappedWithPrefix, constrainFrameHeight, createNoteEditor, createQuestionEditor, FrameViewport, isAskAgentKey, isSubmitEnter, normalizeFocusCycleKey, renderOptionalNote, renderSoftwareCaret, sanitizeDisplayText, sanitizeEditorDisplay, sanitizeProgressLabel, truncateLabel, WrappedChoiceList, type WrappedChoiceItem } from "./tui-primitives.ts";
 
 export type BatchUIResult = TabAnswer[] | { action: "regenerate"; answers: TabAnswer[] } | { action: "clarification"; clarification: string; continuation: BatchContinuation } | null;
 
@@ -32,6 +32,7 @@ export class TabbedQuestions {
 	private reviewing: boolean;
 	private partialReview: boolean;
 	private reviewScroll: number;
+	private frameViewport: FrameViewport;
 	private feedback: string;
 	private clarificationEditor: ReturnType<typeof createQuestionEditor>;
 	private clarificationMode: boolean;
@@ -69,6 +70,7 @@ export class TabbedQuestions {
 		this.reviewing = false;
 		this.partialReview = false;
 		this.reviewScroll = 0;
+		this.frameViewport = new FrameViewport();
 		this.feedback = "";
 		this.clarificationTurns = initialState?.clarificationTurns?.map((turn) => ({ ...turn })) ?? [];
 		this.clarificationPreview = false;
@@ -506,6 +508,11 @@ export class TabbedQuestions {
 	}
 
 	handleInput(data: string): void {
+		if (!this.clarificationMode && !this.reviewing && this.frameViewport.handleInput(data)) {
+			this.invalidate();
+			this.tui.requestRender();
+			return;
+		}
 		if (this.clarificationMode) {
 			if (this.clarificationPreview && (matchesKey(data, Key.left) || matchesKey(data, Key.right))) {
 				const direction = matchesKey(data, Key.left) ? -1 : 1;
@@ -1305,7 +1312,9 @@ export class TabbedQuestions {
 		const reservedTailLines = notePreview.length + (compactHeight ? 0 : 2) + actionLines.length + 2;
 		// Always render the current widget row. The final body viewport may evict
 		// heading/detail rows, but it must keep the selected option reachable.
-		const availableBodyLines = Math.max(1, frameRows - lines.length - reservedTailLines);
+		const availableBodyLines = readOnly
+			? Math.max(1, frameRows - lines.length - reservedTailLines)
+			: Number.POSITIVE_INFINITY;
 		if (tab.mode === "text") {
 			this.renderTextTab(width, lines, add, th, presentationIndex === this.activeTab ? this.editor : this.readOnlyQuestionEditor(tab.textBuffer));
 		} else if (tab.mode === "single-select") {
@@ -1326,8 +1335,13 @@ export class TabbedQuestions {
 		add(th.fg("borderMuted", "─".repeat(width)));
 		lines.push(...actionLines);
 		add(th.fg("accent", "─".repeat(width)));
-		constrainFrameHeight(lines, frameRows, actionLines.length + 2);
-		return lines;
+		if (readOnly) {
+			constrainFrameHeight(lines, frameRows, actionLines.length + 2);
+			return lines;
+		}
+		// Batch actions may consume the whole frame at narrow heights. Unlike a
+		// standalone form, navigation can restore the question body afterward.
+		return this.frameViewport.render(lines, frameRows, actionLines.length + 2, width, th, false);
 	}
 
 	private readOnlyQuestionEditor(text: string): ReturnType<typeof createQuestionEditor> {

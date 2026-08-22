@@ -414,6 +414,93 @@ export class WrappedChoiceList {
 	}
 }
 
+export class FrameViewport {
+	private offset = 0;
+	private pageSize = 1;
+	private revealActive = false;
+	private canScroll = false;
+	private layoutKey = "";
+
+	/** Consume outer-frame paging before a nested editor or Pi sees the key. */
+	handleInput(data: string): boolean {
+		const pageUp = matchesKey(data, Key.pageUp) || matchesKey(data, Key.ctrl("pageUp"));
+		const pageDown = matchesKey(data, Key.pageDown) || matchesKey(data, Key.ctrl("pageDown"));
+		if (!pageUp && !pageDown) {
+			this.revealActive = true;
+			return false;
+		}
+		if (!this.canScroll) return false;
+		this.offset = Math.max(0, this.offset + (pageUp ? -this.pageSize : this.pageSize));
+		this.revealActive = false;
+		return true;
+	}
+
+	render(lines: string[], terminalRows: number | undefined, tailLines: number, width: number, theme: any, reserveBodyRow = true): string[] {
+		if (terminalRows === undefined || lines.length <= terminalRows) {
+			this.canScroll = false;
+			this.offset = 0;
+			this.pageSize = Math.max(1, lines.length - tailLines);
+			this.revealActive = false;
+			this.layoutKey = "";
+			return lines;
+		}
+		const requestedTail = Math.min(Math.max(0, tailLines), lines.length);
+		const hasBody = lines.length > requestedTail;
+		const keepTail = Math.min(requestedTail, hasBody && reserveBodyRow ? Math.max(0, terminalRows - 1) : terminalRows);
+		const body = lines.slice(0, lines.length - keepTail);
+		const tail = lines.slice(lines.length - keepTail);
+		const budget = Math.max(0, terminalRows - keepTail);
+		const layoutKey = `${terminalRows}:${keepTail}:${body.length}`;
+		// Tiny standalone frames must open on their active editor/choice rather
+		// than spending every body row on heading details. Taller frames retain
+		// the top-first reading order and can be paged explicitly.
+		if (reserveBodyRow && terminalRows <= 8 && layoutKey !== this.layoutKey) this.revealActive = true;
+		this.layoutKey = layoutKey;
+		this.pageSize = Math.max(1, budget - 1);
+		const maxOffset = Math.max(0, body.length - budget);
+		this.canScroll = budget > 0 && maxOffset > 0;
+		if (!this.canScroll) this.offset = 0;
+		if (this.revealActive && budget > 0) {
+			const editorCursor = body.findIndex((line) => line.includes(CURSOR_MARKER));
+			const active = editorCursor >= 0 ? editorCursor : body.findIndex((line) => line.includes("→"));
+			if (active >= 0) {
+				if (active < this.offset) this.offset = active;
+				else if (active >= this.offset + budget) this.offset = active - Math.floor(budget / 2);
+			}
+		}
+		this.revealActive = false;
+		this.offset = Math.min(this.offset, maxOffset);
+		const visible = body.slice(this.offset, this.offset + budget);
+		const isActive = (line: string) => line.includes(CURSOR_MARKER) || line.includes("→");
+		const needsUp = this.offset > 0;
+		const needsDown = this.offset < maxOffset;
+		const usedRows = new Set<number>();
+		const findIndicatorRow = (fromEnd: boolean): number | undefined => {
+			const indexes = Array.from({ length: visible.length }, (_, index) => index);
+			if (fromEnd) indexes.reverse();
+			return indexes.find((index) => !usedRows.has(index) && !isActive(visible[index]!) && visibleWidth(visible[index]!) === 0)
+				?? indexes.find((index) => !usedRows.has(index) && !isActive(visible[index]!));
+		};
+		const setIndicator = (text: string, fromEnd: boolean): boolean => {
+			// At least one real content row—especially an active choice or editor
+			// caret—must survive even in a one- or two-row body viewport.
+			if (usedRows.size >= visible.length - 1) return false;
+			const row = findIndicatorRow(fromEnd);
+			if (row === undefined) return false;
+			usedRows.add(row);
+			visible[row] = truncateToWidth(theme.fg("dim", text), width);
+			return true;
+		};
+		if (needsUp && needsDown && visible.length === 2) {
+			setIndicator(" ↕ more · PgUp / PgDn", true);
+		} else {
+			if (needsUp) setIndicator(" ↑ more · PgUp / Ctrl+PgUp", false);
+			if (needsDown) setIndicator(" ↓ more · PgDn / Ctrl+PgDn", true);
+		}
+		return [...visible, ...tail].slice(0, terminalRows);
+	}
+}
+
 export function constrainFrameHeight(lines: string[], terminalRows: number | undefined, tailLines = 2): void {
 	if (terminalRows === undefined || lines.length <= terminalRows) return;
 	const keepTail = Math.min(Math.max(0, tailLines), terminalRows);
